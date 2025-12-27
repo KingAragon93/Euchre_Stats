@@ -5,10 +5,10 @@ Provides data analysis and chart generation using Pandas.
 
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple
-import database as db
+import database_firestore as db
 
 
-def get_game_score_history(game_id: int) -> pd.DataFrame:
+def get_game_score_history(game_id: str) -> pd.DataFrame:
     """
     Get score history for a game as a DataFrame.
     Returns DataFrame with columns: hand_number, team1_score, team2_score
@@ -37,7 +37,7 @@ def get_game_score_history(game_id: int) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def get_game_hands_df(game_id: int) -> pd.DataFrame:
+def get_game_hands_df(game_id: str) -> pd.DataFrame:
     """Get hands for a game as a formatted DataFrame."""
     hands = db.get_hands(game_id)
     game = db.get_game(game_id)
@@ -69,7 +69,7 @@ def get_game_hands_df(game_id: int) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def get_game_call_breakdown(game_id: int) -> pd.DataFrame:
+def get_game_call_breakdown(game_id: str) -> pd.DataFrame:
     """
     Get breakdown of calls for a game.
     Returns DataFrame with: call_value, count, total_points, avg_points, euchre_count, euchre_rate
@@ -284,3 +284,90 @@ def get_team_stats() -> pd.DataFrame:
         })
     
     return pd.DataFrame(stats).sort_values('Wins', ascending=False)
+
+
+def get_partnership_stats() -> pd.DataFrame:
+    """
+    Get statistics for player partnerships (pairs of players on the same team).
+    Returns DataFrame with: partners, games_played, games_won, win_rate, points_scored, points_lost, net_points
+    """
+    from itertools import combinations
+    
+    games = db.get_all_games()
+    hands = db.get_all_hands()
+    
+    if not games:
+        return pd.DataFrame()
+    
+    # Build a lookup for hands by game_id
+    hands_by_game = {}
+    for hand in hands:
+        game_id = hand['game_id']
+        if game_id not in hands_by_game:
+            hands_by_game[game_id] = []
+        hands_by_game[game_id].append(hand)
+    
+    partnership_stats = {}
+    
+    for game in games:
+        # Only count finished games for win/loss stats
+        is_finished = game['status'] == 'finished'
+        
+        # Process both teams
+        for team_key in ['team1', 'team2']:
+            if team_key == 'team1':
+                players = game['team1_players']
+                team_name = game['team1_name']
+                won = game.get('winner') == team_name if is_finished else False
+            else:
+                players = game['team2_players']
+                team_name = game['team2_name']
+                won = game.get('winner') == team_name if is_finished else False
+            
+            # Get all pairs of players on this team
+            for pair in combinations(sorted(players), 2):
+                pair_key = f"{pair[0]} & {pair[1]}"
+                
+                if pair_key not in partnership_stats:
+                    partnership_stats[pair_key] = {
+                        'games_played': 0,
+                        'games_won': 0,
+                        'points_scored': 0,
+                        'points_lost': 0,
+                    }
+                
+                partnership_stats[pair_key]['games_played'] += 1
+                if is_finished and won:
+                    partnership_stats[pair_key]['games_won'] += 1
+                
+                # Calculate points for this team in this game
+                game_hands = hands_by_game.get(game['id'], [])
+                for hand in game_hands:
+                    if hand['caller_team'] == team_key:
+                        if hand['is_euchre']:
+                            partnership_stats[pair_key]['points_lost'] += hand['points_scored']
+                        else:
+                            partnership_stats[pair_key]['points_scored'] += hand['points_scored']
+    
+    # Convert to list of dicts
+    stats = []
+    for pair_key, data in partnership_stats.items():
+        games_played = data['games_played']
+        games_won = data['games_won']
+        points_scored = data['points_scored']
+        points_lost = data['points_lost']
+        net_points = points_scored - points_lost
+        
+        stats.append({
+            'Partners': pair_key,
+            'Games': games_played,
+            'Wins': games_won,
+            'Win Rate': f"{(games_won / games_played * 100):.0f}%" if games_played > 0 else "0%",
+            'Points Scored': points_scored,
+            'Points Lost': points_lost,
+            'Net Points': net_points,
+            'Avg Net/Game': round(net_points / games_played, 1) if games_played > 0 else 0
+        })
+    
+    # Sort by net points descending
+    return pd.DataFrame(stats).sort_values('Net Points', ascending=False)

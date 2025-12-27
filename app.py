@@ -4,13 +4,32 @@ Euchre Stats - A Streamlit app for tracking and analyzing Euchre games.
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from datetime import datetime
-import database as db
+import database_firestore as db
 import analytics
 from models import COMMON_CALL_VALUES
 
-# Initialize database
+# Helper to scroll to top of page (call this at start of page to check if scroll needed)
+def check_scroll_to_top():
+    """Check if we should scroll to top and do it."""
+    if st.session_state.get('scroll_to_top', False):
+        st.session_state['scroll_to_top'] = False
+        components.html(
+            """
+            <script>
+                window.parent.document.querySelector('section.main').scrollTo({top: 0, behavior: 'instant'});
+            </script>
+            """,
+            height=0
+        )
+
+def trigger_scroll_to_top():
+    """Set flag to scroll to top on next rerun."""
+    st.session_state['scroll_to_top'] = True
+
+# Initialize database connection
 db.init_database()
 
 # Page config
@@ -145,10 +164,21 @@ st.markdown(f'<div style="position:fixed;width:100%;height:100%;pointer-events:n
 st.sidebar.markdown("### 🎄 Euchre Stats 🎄")
 st.sidebar.markdown("*Christmas Edition*")
 st.sidebar.markdown("---")
+
+# Navigation options
+nav_options = ["🏠 Home", "➕ New Game", "🎮 Active Games", "🏆 Finished Games", "📊 Statistics"]
+
+# Check if we need to navigate to a specific page (before rendering radio)
+if 'nav_to' in st.session_state:
+    st.session_state['nav_radio'] = st.session_state['nav_to']
+    del st.session_state['nav_to']
+
 page = st.sidebar.radio(
     "Navigate",
-    ["🏠 Home", "➕ New Game", "🎮 Active Games", "🏆 Finished Games", "📊 Statistics"]
+    nav_options,
+    key="nav_radio"
 )
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("🎅 *Merry Christmas!* 🎁")
 
@@ -270,6 +300,9 @@ def new_game_page():
 
 def active_games_page():
     """View and manage active games."""
+    # Check if we need to scroll to top (after logging a hand)
+    check_scroll_to_top()
+    
     st.markdown("""
     <div class="christmas-header">
         <h2>🎮 Active Games 🎄</h2>
@@ -338,55 +371,9 @@ def active_games_page():
     
     all_players = game['team1_players'] + game['team2_players']
     
-    # Initialize session state for euchre dialog
-    if 'pending_hand' not in st.session_state:
-        st.session_state['pending_hand'] = None
-    
-    # Check if we need to show euchre dialog
-    if st.session_state['pending_hand'] is not None:
-        pending = st.session_state['pending_hand']
-        other_team = game['team2_name'] if pending['caller_team'] == 'team1' else game['team1_name']
-        caller_team_name = game['team1_name'] if pending['caller_team'] == 'team1' else game['team2_name']
-        
-        st.warning(f"❄️ **Euchre Alert!** {pending['caller_name']} got euchred!")
-        st.markdown(f"**{caller_team_name}** loses **{pending['points_scored']}** points (from calling {pending['call_value']})")
-        st.markdown(f"**{other_team}** gets points. How many?")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            other_points = st.number_input(
-                "Points for other team",
-                min_value=1,
-                value=pending['points_scored'],  # Default to same as call value
-                key="euchre_points_input"
-            )
-        
-        col_confirm, col_cancel = st.columns(2)
-        with col_confirm:
-            if st.button("✅ Confirm Euchre", use_container_width=True, type="primary"):
-                db.add_hand(
-                    game_id=game_id,
-                    caller_name=pending['caller_name'],
-                    caller_team=pending['caller_team'],
-                    call_value=pending['call_value'],
-                    points_scored=pending['points_scored'],
-                    is_euchre=True,
-                    other_team_points=other_points,
-                    notes=pending['notes']
-                )
-                st.session_state['pending_hand'] = None
-                st.success("🎄 Hand logged - Euchre recorded!")
-                st.rerun()
-        
-        with col_cancel:
-            if st.button("❌ Cancel", use_container_width=True):
-                st.session_state['pending_hand'] = None
-                st.rerun()
-        
-        st.divider()
-    
-    # Main hand entry form
-    with st.form("log_hand_form"):
+    # Main hand entry form - use dynamic key to reset form after submission
+    form_key = f"log_hand_form_{st.session_state.get('form_key', 0)}"
+    with st.form(form_key, clear_on_submit=True):
         col1, col2 = st.columns(2)
         
         with col1:
@@ -407,17 +394,8 @@ def active_games_page():
             if call_value == "Other":
                 call_value = st.text_input("Enter call value")
         
-        col3, col4 = st.columns(2)
-        
-        with col3:
-            is_euchre = st.checkbox("❄️ Was it a Euchre?")
-        
-        with col4:
-            if not is_euchre:
-                points_scored = st.number_input("Points Scored by Caller", min_value=0, value=0)
-            else:
-                st.info("Points lost = call value")
-                points_scored = 0  # Will be set from call value
+        # Points scored - if less than call value, it's a euchre
+        points_scored = st.number_input("Points Scored by Caller", min_value=0, value=0)
         
         notes = st.text_input("Notes (optional)")
         
@@ -426,35 +404,71 @@ def active_games_page():
         if submitted:
             if not call_value:
                 st.error("Please select or enter a call value!")
-            elif is_euchre:
-                # For euchre, points lost = call value (try to parse as int)
-                try:
-                    euchre_points_lost = int(call_value)
-                except ValueError:
-                    # For non-numeric calls like "Partner Best", default to 2
-                    euchre_points_lost = 2
-                
-                # Store pending hand and show euchre dialog
-                st.session_state['pending_hand'] = {
-                    'caller_name': caller_name,
-                    'caller_team': caller_team,
-                    'call_value': call_value,
-                    'points_scored': euchre_points_lost,  # Use call value as points lost
-                    'notes': notes if notes else None
-                }
-                st.rerun()
             else:
+                # Parse call value to determine if it's a euchre
+                # Special calls have specific point requirements
+                if call_value == "Partner Best":
+                    # For Partner Best, input is TRICKS (0-8), not points
+                    # Must get all 8 tricks to succeed
+                    tricks_gotten = points_scored  # Input is tricks, not points
+                    is_euchre = tricks_gotten < 8
+                    if is_euchre:
+                        other_team_points = 8 - tricks_gotten
+                        euchre_penalty = 16  # Caller loses 16 points
+                    else:
+                        other_team_points = 0
+                        euchre_penalty = 0
+                    # Record the actual points (tricks * 2 for success, or penalty for euchre)
+                    points_to_record = euchre_penalty if is_euchre else 16
+                elif call_value == "Alone":
+                    # For Alone, input is also TRICKS (0-8)
+                    tricks_gotten = points_scored
+                    is_euchre = tricks_gotten < 8
+                    if is_euchre:
+                        other_team_points = 8 - tricks_gotten
+                        euchre_penalty = 8  # Caller loses 8 points
+                    else:
+                        other_team_points = 0
+                        euchre_penalty = 0
+                    points_to_record = euchre_penalty if is_euchre else 8
+                else:
+                    try:
+                        call_value_int = int(call_value)
+                    except ValueError:
+                        # Unknown call type, default to requiring the points entered
+                        call_value_int = points_scored  # No euchre detection
+                    
+                    # Detect euchre: if points scored < call value
+                    is_euchre = points_scored < call_value_int
+                    
+                    if is_euchre:
+                        # Other team gets (8 - points_scored)
+                        other_team_points = 8 - points_scored
+                        euchre_penalty = call_value_int  # Caller loses what they called
+                    else:
+                        other_team_points = 0
+                        euchre_penalty = 0
+                    
+                    # For euchre, pass the penalty as points_scored (what caller loses)
+                    # For normal hands, pass the actual points scored
+                    points_to_record = euchre_penalty if is_euchre else points_scored
+                
                 db.add_hand(
                     game_id=game_id,
                     caller_name=caller_name,
                     caller_team=caller_team,
                     call_value=call_value,
-                    points_scored=points_scored,
-                    is_euchre=False,
-                    other_team_points=0,
+                    points_scored=points_to_record,
+                    is_euchre=is_euchre,
+                    other_team_points=other_team_points,
                     notes=notes if notes else None
                 )
-                st.success("🎄 Hand logged!")
+                st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
+                if is_euchre:
+                    st.success(f"❄️ Euchre! Caller loses {euchre_penalty}, other team gets {other_team_points}!")
+                else:
+                    st.success("🎄 Hand logged!")
+                trigger_scroll_to_top()
                 st.rerun()
     
     st.divider()
@@ -628,17 +642,23 @@ def statistics_page():
     
     st.divider()
     
+    # Partnership statistics
+    st.subheader("🤝 Partnership Statistics")
+    st.caption("See which player pairs perform best together!")
+    partnership_stats = analytics.get_partnership_stats()
+    if not partnership_stats.empty:
+        st.dataframe(partnership_stats, use_container_width=True, hide_index=True)
+    else:
+        st.info("Play more games to see partnership statistics!")
+    
+    st.divider()
+    
     # Team statistics
     st.subheader("🎁 Team Statistics")
     team_stats = analytics.get_team_stats()
     if not team_stats.empty:
         st.dataframe(team_stats, use_container_width=True, hide_index=True)
 
-
-# Handle navigation from session state
-if 'nav_to' in st.session_state:
-    page = st.session_state['nav_to']
-    del st.session_state['nav_to']
 
 # Route to appropriate page
 if page == "🏠 Home":

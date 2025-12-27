@@ -110,7 +110,56 @@ Euchre_Stats/
 
 ## Data Storage
 
-The app uses SQLite (`euchre_stats.db`) for persistence. The database is created automatically on first run.
+The app uses SQLite for local data management, synced to **Google Cloud Storage** (bucket: `euchrestats`) for persistence across deployments.
+
+### Google Cloud Storage Setup
+
+The app requires GCS authentication. Choose one of these methods:
+
+#### For Local Development
+
+**Option A: Google Cloud CLI (Recommended)**
+```bash
+# Install gcloud CLI, then:
+gcloud auth application-default login
+```
+
+**Option B: Service Account File**
+```bash
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
+```
+
+**Option C: JSON in Environment Variable**
+```bash
+export GCS_CREDENTIALS_JSON='{"type":"service_account",...}'
+```
+
+#### For Streamlit Cloud Deployment
+
+1. Create a service account in Google Cloud Console with **Storage Object Admin** role on the `euchrestats` bucket
+2. Download the service account JSON key
+3. In Streamlit Cloud, go to your app's settings → **Secrets**
+4. Add the service account JSON under `gcp_service_account`:
+
+```toml
+[gcp_service_account]
+type = "service_account"
+project_id = "your-project-id"
+private_key_id = "your-private-key-id"
+private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+client_email = "your-service-account@your-project.iam.gserviceaccount.com"
+client_id = "123456789"
+auth_uri = "https://accounts.google.com/o/oauth2/auth"
+token_uri = "https://oauth2.googleapis.com/token"
+auth_provider_x509_cert_url = "https://www.googleapis.com/oauth2/v1/certs"
+client_x509_cert_url = "https://www.googleapis.com/robot/v1/metadata/x509/..."
+```
+
+### Database Sync Behavior
+
+- **On startup**: Downloads `euchre_stats.db` from GCS (if exists)
+- **After writes**: Automatically uploads changes to GCS
+- **Local fallback**: Works locally without GCS if authentication fails
 
 ### Tables
 
