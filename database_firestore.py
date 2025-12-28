@@ -224,9 +224,15 @@ def add_hand(
     points_scored: int,
     is_euchre: bool,
     other_team_points: int,
-    notes: Optional[str] = None
+    notes: Optional[str] = None,
+    auto_finish: bool = True
 ) -> str:
-    """Add a hand to a game and update scores. Returns hand ID."""
+    """Add a hand to a game and update scores. Returns hand ID.
+    
+    Args:
+        auto_finish: If True, automatically finish the game if target score is reached.
+                    If False, just record the hand without finishing.
+    """
     db = get_firestore_client()
     if not db:
         raise Exception("Firestore not connected")
@@ -285,12 +291,13 @@ def add_hand(
     # Update game scores
     update_game_scores(game_id, team1_cumulative, team2_cumulative)
     
-    # Check if game should be finished
-    target = game['target_score']
-    if team1_cumulative >= target:
-        finish_game(game_id, game['team1_name'])
-    elif team2_cumulative >= target:
-        finish_game(game_id, game['team2_name'])
+    # Check if game should be finished (only if auto_finish is True)
+    if auto_finish:
+        target = game['target_score']
+        if team1_cumulative >= target:
+            finish_game(game_id, game['team1_name'])
+        elif team2_cumulative >= target:
+            finish_game(game_id, game['team2_name'])
     
     return hand_id
 
@@ -364,6 +371,129 @@ def delete_last_hand(game_id: str) -> bool:
         })
     
     return True
+
+
+def update_hand(
+    hand_id: str,
+    game_id: str,
+    caller_name: str,
+    caller_team: str,
+    call_value: str,
+    points_scored: int,
+    is_euchre: bool,
+    other_team_points: int,
+    notes: Optional[str] = None
+) -> bool:
+    """Update a hand and recalculate all subsequent scores. Returns True if successful."""
+    db = get_firestore_client()
+    if not db:
+        return False
+    
+    game = get_game(game_id)
+    if not game:
+        return False
+    
+    hands = get_hands(game_id)
+    if not hands:
+        return False
+    
+    # Find the hand to update
+    hand_to_update = None
+    hand_index = -1
+    for i, h in enumerate(hands):
+        if h['id'] == hand_id:
+            hand_to_update = h
+            hand_index = i
+            break
+    
+    if hand_to_update is None:
+        return False
+    
+    # Calculate deltas for the updated hand
+    if is_euchre:
+        if caller_team == "team1":
+            team1_delta = -points_scored
+            team2_delta = other_team_points
+        else:
+            team1_delta = other_team_points
+            team2_delta = -points_scored
+    else:
+        if caller_team == "team1":
+            team1_delta = points_scored
+            team2_delta = 0
+        else:
+            team1_delta = 0
+            team2_delta = points_scored
+    
+    # Get cumulative scores up to this hand (from previous hand)
+    if hand_index == 0:
+        prev_team1 = 0
+        prev_team2 = 0
+    else:
+        prev_hand = hands[hand_index - 1]
+        prev_team1 = prev_hand['team1_cumulative']
+        prev_team2 = prev_hand['team2_cumulative']
+    
+    team1_cumulative = prev_team1 + team1_delta
+    team2_cumulative = prev_team2 + team2_delta
+    
+    # Update the hand document
+    db.collection('hands').document(hand_id).update({
+        'caller_name': caller_name,
+        'caller_team': caller_team,
+        'call_value': call_value,
+        'points_scored': points_scored,
+        'is_euchre': is_euchre,
+        'other_team_points': other_team_points,
+        'team1_delta': team1_delta,
+        'team2_delta': team2_delta,
+        'team1_cumulative': team1_cumulative,
+        'team2_cumulative': team2_cumulative,
+        'notes': notes
+    })
+    
+    # Now recalculate all subsequent hands
+    for i in range(hand_index + 1, len(hands)):
+        current_hand = hands[i]
+        
+        # Recalculate cumulative based on current hand's deltas
+        team1_cumulative = team1_cumulative + current_hand['team1_delta']
+        team2_cumulative = team2_cumulative + current_hand['team2_delta']
+        
+        db.collection('hands').document(current_hand['id']).update({
+            'team1_cumulative': team1_cumulative,
+            'team2_cumulative': team2_cumulative
+        })
+    
+    # Update game scores to final cumulative
+    update_game_scores(game_id, team1_cumulative, team2_cumulative)
+    
+    # Check if winner needs to be recalculated
+    target = game['target_score']
+    if team1_cumulative >= target:
+        db.collection('games').document(game_id).update({
+            'winner': game['team1_name']
+        })
+    elif team2_cumulative >= target:
+        db.collection('games').document(game_id).update({
+            'winner': game['team2_name']
+        })
+    
+    return True
+
+
+def get_hand(hand_id: str) -> Optional[Dict[str, Any]]:
+    """Get a single hand by ID."""
+    db = get_firestore_client()
+    if not db:
+        return None
+    
+    doc = db.collection('hands').document(hand_id).get()
+    if doc.exists:
+        hand = doc.to_dict()
+        hand['id'] = doc.id
+        return hand
+    return None
 
 
 def get_all_players() -> List[str]:
