@@ -303,6 +303,25 @@ def active_games_page():
     # Check if we need to scroll to top (after logging a hand)
     check_scroll_to_top()
     
+    # Show success message if set
+    if 'show_success' in st.session_state:
+        st.success(st.session_state['show_success'])
+        del st.session_state['show_success']
+    
+    @st.dialog("Confirm Delete")
+    def confirm_delete_dialog(game_id):
+        st.write("Are you sure you want to delete this game? This action cannot be undone.")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Delete", type="primary", use_container_width=True):
+                db.delete_game(game_id)
+                st.session_state.pop('active_game_id', None)
+                st.success("Game deleted!")
+                st.rerun()
+        with col2:
+            if st.button("Cancel", use_container_width=True):
+                st.rerun()
+    
     st.markdown("""
     <div class="christmas-header">
         <h2>🎮 Active Games 🎄</h2>
@@ -395,9 +414,10 @@ def active_games_page():
                     )
                     st.session_state['pending_game_end'] = None
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
+                    st.session_state['caller_index'] = 0  # Reset caller to unassigned
                     st.balloons()
                     st.success(f"🎉 Game Over! {pending['winner']} wins!")
-                    trigger_scroll_to_top()
+                    st.session_state['nav_to'] = "🏆 Finished Games"
                     st.rerun()
             
             with col2:
@@ -411,6 +431,24 @@ def active_games_page():
     st.subheader("📝 Log Hand")
     
     all_players = game['team1_players'] + game['team2_players']
+    caller_options = ["Unassigned"] + all_players
+    
+    if 'caller_index' not in st.session_state:
+        st.session_state['caller_index'] = 0
+    
+    selected_caller = st.selectbox("Caller", caller_options, index=st.session_state['caller_index'], key=f"caller_select_{st.session_state.get('form_key', 0)}")
+    
+    if selected_caller != "Unassigned":
+        if selected_caller in game['team1_players']:
+            selected_team = "team1"
+            selected_team_name = game['team1_name']
+        else:
+            selected_team = "team2"
+            selected_team_name = game['team2_name']
+        st.info(f"Team: {selected_team_name}")
+    else:
+        selected_team = None
+        st.info("Team: Unassigned")
     
     # Main hand entry form - use dynamic key to reset form after submission
     form_key = f"log_hand_form_{st.session_state.get('form_key', 0)}"
@@ -418,34 +456,26 @@ def active_games_page():
         col1, col2 = st.columns(2)
         
         with col1:
-            caller_name = st.selectbox("Caller", all_players)
-            
-            # Determine caller's team
-            if caller_name in game['team1_players']:
-                caller_team = "team1"
-                caller_team_name = game['team1_name']
-            else:
-                caller_team = "team2"
-                caller_team_name = game['team2_name']
-            
-            st.info(f"Team: {caller_team_name}")
-        
-        with col2:
             call_value = st.selectbox("What Was Called", COMMON_CALL_VALUES + ["Other"])
             if call_value == "Other":
                 call_value = st.text_input("Enter call value")
         
-        # Points scored - if less than call value, it's a euchre
-        points_scored = st.number_input("Points Scored by Caller", min_value=0, value=0)
+        with col2:
+            # Points scored - if less than call value, it's a euchre
+            points_scored = st.number_input("Points Scored by Caller", min_value=0, value=0)
         
         notes = st.text_input("Notes (optional)")
         
         submitted = st.form_submit_button("✅ Log Hand", use_container_width=True)
         
         if submitted:
-            if not call_value:
+            if selected_caller == "Unassigned":
+                st.error("Please select a caller!")
+            elif not call_value:
                 st.error("Please select or enter a call value!")
             else:
+                caller_name = selected_caller
+                caller_team = selected_team
                 # Parse call value to determine if it's a euchre
                 # Special calls have specific point requirements
                 if call_value == "Partner Best":
@@ -553,10 +583,11 @@ def active_games_page():
                         notes=notes if notes else None
                     )
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
+                    st.session_state['caller_index'] = 0  # Reset caller to unassigned
                     if is_euchre:
-                        st.success(f"❄️ Euchre! Caller loses {points_to_record}, other team gets {other_team_points}!")
+                        st.session_state['show_success'] = f"❄️ Euchre! Caller loses {points_to_record}, other team gets {other_team_points}!"
                     else:
-                        st.success("🎄 Hand logged!")
+                        st.session_state['show_success'] = "🎄 Hand logged!"
                     trigger_scroll_to_top()
                     st.rerun()
     
@@ -593,20 +624,25 @@ def active_games_page():
     col1, col2 = st.columns(2)
     with col2:
         if st.button("🗑️ Delete Game", type="secondary"):
-            if st.session_state.get('confirm_delete') == game_id:
-                db.delete_game(game_id)
-                st.session_state.pop('confirm_delete', None)
-                st.session_state.pop('active_game_id', None)
-                st.success("Game deleted!")
-                st.rerun()
-            else:
-                st.session_state['confirm_delete'] = game_id
-                st.warning("Click again to confirm deletion!")
-                st.rerun()
+            confirm_delete_dialog(game_id)
 
 
 def finished_games_page():
     """View finished games."""
+    
+    @st.dialog("Confirm Delete")
+    def confirm_delete_dialog(game_id):
+        st.write("Are you sure you want to delete this game? This action cannot be undone.")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Delete", type="primary", use_container_width=True):
+                db.delete_game(game_id)
+                st.success("Game deleted!")
+                st.rerun()
+        with col2:
+            if st.button("Cancel", use_container_width=True):
+                st.rerun()
+    
     st.markdown("""
     <div class="christmas-header">
         <h2>🏆 Finished Games 🎄</h2>
@@ -685,82 +721,86 @@ def finished_games_page():
                         with col1:
                             new_caller = st.selectbox("Caller", all_players, key=f"new_caller_{game['id']}")
                             
-                            call_options = ["1", "2", "3", "4", "Alone", "Partner Best"]
-                            new_call_value = st.selectbox("Call Value", call_options, key=f"new_call_{game['id']}")
+                            new_call_value = st.selectbox("What Was Called", COMMON_CALL_VALUES + ["Other"], key=f"new_call_{game['id']}")
+                            if new_call_value == "Other":
+                                new_call_value = st.text_input("Enter call value", key=f"new_call_other_{game['id']}")
                         
                         with col2:
-                            # Determine max based on call value
-                            if new_call_value == "Alone":
-                                max_val = 8
-                                help_text = "Tricks won (max 8 for Alone)"
-                            elif new_call_value == "Partner Best":
-                                max_val = 8
-                                help_text = "Tricks won (max 8 for Partner Best)"
-                            else:
-                                max_val = int(new_call_value) * 2
-                                help_text = f"Points scored (max {max_val})"
+                            new_points = st.number_input("Points Scored by Caller", min_value=0, value=0, key=f"new_points_{game['id']}")
                             
-                            new_points = st.number_input(
-                                "Points/Tricks",
-                                min_value=0,
-                                max_value=max_val,
-                                value=0,
-                                help=help_text,
-                                key=f"new_points_{game['id']}"
-                            )
-                            
-                            new_notes = st.text_input("Notes", key=f"new_notes_{game['id']}")
+                            new_notes = st.text_input("Notes (optional)", key=f"new_notes_{game['id']}")
                         
                         if st.form_submit_button("➕ Add Hand", use_container_width=True, type="primary"):
-                            # Determine caller team
-                            if new_caller in game['team1_players']:
-                                caller_team = "team1"
+                            if not new_call_value:
+                                st.error("Please select or enter a call value!")
                             else:
-                                caller_team = "team2"
-                            
-                            # Handle special calls
-                            if new_call_value == "Alone":
-                                if new_points == 8:
-                                    points_to_record = 8
-                                    is_euchre = False
-                                    other_team_points = 0
+                                # Determine caller team
+                                if new_caller in game['team1_players']:
+                                    caller_team = "team1"
                                 else:
-                                    is_euchre = True
-                                    points_to_record = 8
-                                    other_team_points = 8 - new_points
-                            elif new_call_value == "Partner Best":
-                                if new_points == 8:
-                                    points_to_record = 16
-                                    is_euchre = False
-                                    other_team_points = 0
+                                    caller_team = "team2"
+                                
+                                # Parse call value to determine if it's a euchre
+                                # Special calls have specific point requirements
+                                if new_call_value == "Partner Best":
+                                    # For Partner Best, input is TRICKS (0-8), not points
+                                    # Must get all 8 tricks to succeed
+                                    tricks_gotten = new_points  # Input is tricks, not points
+                                    is_euchre = tricks_gotten < 8
+                                    if is_euchre:
+                                        other_team_points = 8 - tricks_gotten
+                                        euchre_penalty = 16  # Caller loses 16 points
+                                    else:
+                                        other_team_points = 0
+                                        euchre_penalty = 0
+                                    # Record the actual points (tricks * 2 for success, or penalty for euchre)
+                                    points_to_record = euchre_penalty if is_euchre else 16
+                                elif new_call_value == "Alone":
+                                    # For Alone, input is also TRICKS (0-8)
+                                    tricks_gotten = new_points
+                                    is_euchre = tricks_gotten < 8
+                                    if is_euchre:
+                                        other_team_points = 8 - tricks_gotten
+                                        euchre_penalty = 8  # Caller loses 8 points
+                                    else:
+                                        other_team_points = 0
+                                        euchre_penalty = 0
+                                    points_to_record = euchre_penalty if is_euchre else 8
                                 else:
-                                    is_euchre = True
-                                    points_to_record = 16
-                                    other_team_points = 8 - new_points
-                            else:
-                                call_int = int(new_call_value)
-                                if new_points < call_int:
-                                    is_euchre = True
-                                    points_to_record = call_int * 2
-                                    other_team_points = 8 - new_points
-                                else:
-                                    is_euchre = False
-                                    points_to_record = new_points
-                                    other_team_points = 0
-                            
-                            db.add_hand(
-                                game_id=game['id'],
-                                caller_name=new_caller,
-                                caller_team=caller_team,
-                                call_value=new_call_value,
-                                points_scored=points_to_record,
-                                is_euchre=is_euchre,
-                                other_team_points=other_team_points,
-                                notes=new_notes if new_notes else None,
-                                auto_finish=False  # Don't auto-finish since game is already finished
-                            )
-                            st.success(f"✅ Hand #{len(hands) + 1} added!")
-                            st.rerun()
+                                    try:
+                                        call_value_int = int(new_call_value)
+                                    except ValueError:
+                                        # Unknown call type, default to requiring the points entered
+                                        call_value_int = new_points  # No euchre detection
+                                    
+                                    # Detect euchre: if points scored < call value
+                                    is_euchre = new_points < call_value_int
+                                    
+                                    if is_euchre:
+                                        # Other team gets (8 - points_scored)
+                                        other_team_points = 8 - new_points
+                                        euchre_penalty = call_value_int  # Caller loses what they called
+                                    else:
+                                        other_team_points = 0
+                                        euchre_penalty = 0
+                                    
+                                    # For euchre, pass the penalty as points_scored (what caller loses)
+                                    # For normal hands, pass the actual points scored
+                                    points_to_record = euchre_penalty if is_euchre else new_points
+                                
+                                db.add_hand(
+                                    game_id=game['id'],
+                                    caller_name=new_caller,
+                                    caller_team=caller_team,
+                                    call_value=new_call_value,
+                                    points_scored=points_to_record,
+                                    is_euchre=is_euchre,
+                                    other_team_points=other_team_points,
+                                    notes=new_notes if new_notes else None,
+                                    auto_finish=False  # Don't auto-finish since we're editing a finished game
+                                )
+                                st.success(f"✅ Hand #{len(hands) + 1} added!")
+                                st.rerun()
                 
                 else:
                     # Edit existing hand
@@ -776,87 +816,96 @@ def finished_games_page():
                                 caller_idx = all_players.index(selected_hand['caller_name']) if selected_hand['caller_name'] in all_players else 0
                                 edit_caller = st.selectbox("Caller", all_players, index=caller_idx, key=f"edit_caller_{game['id']}")
                                 
-                                call_options = ["1", "2", "3", "4", "Alone", "Partner Best"]
-                                call_idx = call_options.index(selected_hand['call_value']) if selected_hand['call_value'] in call_options else 0
-                                edit_call_value = st.selectbox("Call Value", call_options, index=call_idx, key=f"edit_call_{game['id']}")
+                                # For call value
+                                call_options = COMMON_CALL_VALUES + ["Other"]
+                                if selected_hand['call_value'] in call_options:
+                                    call_idx = call_options.index(selected_hand['call_value'])
+                                    edit_call_value = st.selectbox("What Was Called", call_options, index=call_idx, key=f"edit_call_{game['id']}")
+                                else:
+                                    edit_call_value = st.selectbox("What Was Called", call_options, index=len(call_options)-1, key=f"edit_call_{game['id']}")  # "Other"
+                                if edit_call_value == "Other":
+                                    edit_call_value = st.text_input("Enter call value", value=selected_hand['call_value'], key=f"edit_call_other_{game['id']}")
                             
                             with col2:
-                                # Determine max based on call value
-                                if edit_call_value == "Alone":
-                                    max_val = 8
-                                    help_text = "Tricks won (max 8 for Alone)"
-                                elif edit_call_value == "Partner Best":
-                                    max_val = 8
-                                    help_text = "Tricks won (max 8 for Partner Best)"
-                                else:
-                                    max_val = int(edit_call_value) * 2
-                                    help_text = f"Points scored (max {max_val})"
+                                edit_points = st.number_input("Points Scored by Caller", min_value=0, value=selected_hand['points_scored'], key=f"edit_points_{game['id']}")
                                 
-                                edit_points = st.number_input(
-                                    "Points/Tricks",
-                                    min_value=0,
-                                    max_value=max_val,
-                                    value=min(selected_hand['points_scored'], max_val),
-                                    help=help_text,
-                                    key=f"edit_points_{game['id']}"
-                                )
-                                
-                                edit_notes = st.text_input("Notes", value=selected_hand['notes'] or '', key=f"edit_notes_{game['id']}")
+                                edit_notes = st.text_input("Notes (optional)", value=selected_hand['notes'] or '', key=f"edit_notes_{game['id']}")
                             
                             if st.form_submit_button("💾 Update Hand", use_container_width=True):
-                                # Determine caller team
-                                if edit_caller in game['team1_players']:
-                                    edit_caller_team = "team1"
+                                if not edit_call_value:
+                                    st.error("Please select or enter a call value!")
                                 else:
-                                    edit_caller_team = "team2"
-                                
-                                # Handle special calls
-                                if edit_call_value == "Alone":
-                                    if edit_points == 8:
-                                        points_to_record = 8
-                                        is_euchre = False
-                                        other_team_points = 0
+                                    # Determine caller team
+                                    if edit_caller in game['team1_players']:
+                                        edit_caller_team = "team1"
                                     else:
-                                        is_euchre = True
-                                        points_to_record = 8
-                                        other_team_points = 8 - edit_points
-                                elif edit_call_value == "Partner Best":
-                                    if edit_points == 8:
-                                        points_to_record = 16
-                                        is_euchre = False
-                                        other_team_points = 0
+                                        edit_caller_team = "team2"
+                                    
+                                    # Parse call value to determine if it's a euchre
+                                    # Special calls have specific point requirements
+                                    if edit_call_value == "Partner Best":
+                                        # For Partner Best, input is TRICKS (0-8), not points
+                                        # Must get all 8 tricks to succeed
+                                        tricks_gotten = edit_points  # Input is tricks, not points
+                                        is_euchre = tricks_gotten < 8
+                                        if is_euchre:
+                                            other_team_points = 8 - tricks_gotten
+                                            euchre_penalty = 16  # Caller loses 16 points
+                                        else:
+                                            other_team_points = 0
+                                            euchre_penalty = 0
+                                        # Record the actual points (tricks * 2 for success, or penalty for euchre)
+                                        points_to_record = euchre_penalty if is_euchre else 16
+                                    elif edit_call_value == "Alone":
+                                        # For Alone, input is also TRICKS (0-8)
+                                        tricks_gotten = edit_points
+                                        is_euchre = tricks_gotten < 8
+                                        if is_euchre:
+                                            other_team_points = 8 - tricks_gotten
+                                            euchre_penalty = 8  # Caller loses 8 points
+                                        else:
+                                            other_team_points = 0
+                                            euchre_penalty = 0
+                                        points_to_record = euchre_penalty if is_euchre else 8
                                     else:
-                                        is_euchre = True
-                                        points_to_record = 16
-                                        other_team_points = 8 - edit_points
-                                else:
-                                    call_int = int(edit_call_value)
-                                    if edit_points < call_int:
-                                        is_euchre = True
-                                        points_to_record = call_int * 2
-                                        other_team_points = 8 - edit_points
+                                        try:
+                                            call_value_int = int(edit_call_value)
+                                        except ValueError:
+                                            # Unknown call type, default to requiring the points entered
+                                            call_value_int = edit_points  # No euchre detection
+                                        
+                                        # Detect euchre: if points scored < call value
+                                        is_euchre = edit_points < call_value_int
+                                        
+                                        if is_euchre:
+                                            # Other team gets (8 - points_scored)
+                                            other_team_points = 8 - edit_points
+                                            euchre_penalty = call_value_int  # Caller loses what they called
+                                        else:
+                                            other_team_points = 0
+                                            euchre_penalty = 0
+                                        
+                                        # For euchre, pass the penalty as points_scored (what caller loses)
+                                        # For normal hands, pass the actual points scored
+                                        points_to_record = euchre_penalty if is_euchre else edit_points
+                                    
+                                    success = db.update_hand(
+                                        hand_id=selected_hand_id,
+                                        game_id=game['id'],
+                                        caller_name=edit_caller,
+                                        caller_team=edit_caller_team,
+                                        call_value=edit_call_value,
+                                        points_scored=points_to_record,
+                                        is_euchre=is_euchre,
+                                        other_team_points=other_team_points,
+                                        notes=edit_notes if edit_notes else None
+                                    )
+                                    
+                                    if success:
+                                        st.success("✅ Hand updated! Scores recalculated.")
+                                        st.rerun()
                                     else:
-                                        is_euchre = False
-                                        points_to_record = edit_points
-                                        other_team_points = 0
-                                
-                                success = db.update_hand(
-                                    hand_id=selected_hand_id,
-                                    game_id=game['id'],
-                                    caller_name=edit_caller,
-                                    caller_team=edit_caller_team,
-                                    call_value=edit_call_value,
-                                    points_scored=points_to_record,
-                                    is_euchre=is_euchre,
-                                    other_team_points=other_team_points,
-                                    notes=edit_notes if edit_notes else None
-                                )
-                                
-                                if success:
-                                    st.success("✅ Hand updated! Scores recalculated.")
-                                    st.rerun()
-                                else:
-                                    st.error("❌ Failed to update hand.")
+                                        st.error("❌ Failed to update hand.")
             
             # Call breakdown
             st.subheader("📊 Call Breakdown")
@@ -866,9 +915,7 @@ def finished_games_page():
             
             # Delete option
             if st.button(f"🗑️ Delete Game", key=f"del_{game['id']}"):
-                db.delete_game(game['id'])
-                st.success("Game deleted!")
-                st.rerun()
+                confirm_delete_dialog(game['id'])
 
 
 def statistics_page():

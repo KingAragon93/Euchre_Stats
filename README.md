@@ -2,6 +2,18 @@
 
 A Python-based web app to track, visualize, and analyze Euchre games played with custom house rules.
 
+## Quick Start 🚀
+
+If you already have the repo cloned and dependencies installed:
+
+```bash
+cd Euchre_Stats
+source venv/bin/activate  # Activate virtual environment
+streamlit run app.py --server.port 8504  # Use port 8504 if 8501 is busy
+```
+
+Open your browser to `http://localhost:8504`
+
 ## Features
 
 - **Live Scorekeeping**: Log each hand with flexible, explicit scoring inputs
@@ -49,6 +61,38 @@ streamlit run app.py
 ```
 
 5. Open your browser to `http://localhost:8501`
+
+## Troubleshooting 🔧
+
+### Port Already in Use
+If you see "Port 8501 is already in use":
+```bash
+# Try a different port
+streamlit run app.py --server.port 8502
+# Or kill existing processes
+pkill -f streamlit
+```
+
+### Virtual Environment Issues
+```bash
+# If venv activation fails
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Streamlit Command Not Found
+```bash
+# Make sure venv is activated
+source venv/bin/activate
+# Or install streamlit globally
+pip install streamlit
+```
+
+### Database Connection Issues
+- The app uses Google Cloud Firestore for data storage
+- For local development, ensure you have GCS credentials set up (see Data Storage section)
+- If GCS fails, the app will work locally with SQLite fallback
 
 ## Usage
 
