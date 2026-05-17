@@ -1,6 +1,5 @@
 """
 Euchre Stats - A Streamlit app for tracking and analyzing Euchre games.
-🎄 Christmas Edition! 🎄
 """
 
 import streamlit as st
@@ -34,135 +33,126 @@ db.init_database()
 
 # Page config
 st.set_page_config(
-    page_title="🎄 Euchre Stats - Christmas Edition",
-    page_icon="🎄",
+    page_title="Euchre Stats",
+    page_icon="🃏",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Christmas-themed CSS
+# Modern dark theme CSS
 st.markdown("""
 <style>
-    /* Christmas color scheme */
     :root {
-        --christmas-red: #c41e3a;
-        --christmas-green: #165b33;
-        --christmas-gold: #FFD700;
-        --snow-white: #fffafa;
+        --accent: #6366f1;
+        --accent-hover: #818cf8;
+        --bg: #0b0d12;
+        --surface: #161922;
+        --surface-2: #1e2230;
+        --border: #2a2f3d;
+        --text: #e6e8ee;
+        --text-muted: #8a92a6;
     }
-    
-    /* Snowfall animation */
-    .snowflake {
-        position: fixed;
-        top: -10px;
-        z-index: 9999;
-        color: #fff;
-        font-size: 1.5em;
-        text-shadow: 0 0 5px #fff;
-        animation: fall linear infinite;
-        pointer-events: none;
-    }
-    
-    @keyframes fall {
-        to {
-            transform: translateY(100vh) rotate(360deg);
-        }
-    }
-    
+
     .stButton > button {
         width: 100%;
         margin-bottom: 0.5rem;
-        background: linear-gradient(135deg, #165b33, #1e7a45) !important;
-        border: 2px solid #FFD700 !important;
-        color: white !important;
+        background: var(--surface-2) !important;
+        border: 1px solid var(--border) !important;
+        color: var(--text) !important;
+        border-radius: 8px !important;
+        font-weight: 500 !important;
+        transition: all 0.15s ease !important;
     }
-    
+
     .stButton > button:hover {
-        background: linear-gradient(135deg, #c41e3a, #e52b50) !important;
-        border: 2px solid #FFD700 !important;
+        background: var(--accent) !important;
+        border-color: var(--accent) !important;
+        color: #fff !important;
     }
-    
+
+    .stButton > button[kind="primary"] {
+        background: var(--accent) !important;
+        border-color: var(--accent) !important;
+        color: #fff !important;
+    }
+
+    .stButton > button[kind="primary"]:hover {
+        background: var(--accent-hover) !important;
+        border-color: var(--accent-hover) !important;
+    }
+
     .score-display {
-        font-size: 2rem;
-        font-weight: bold;
+        font-size: 2.5rem;
+        font-weight: 700;
         text-align: center;
+        letter-spacing: -0.02em;
     }
-    
+
     .team-score {
-        padding: 1rem;
-        border-radius: 10px;
+        padding: 1.25rem;
+        border-radius: 12px;
         text-align: center;
         margin: 0.5rem 0;
-        border: 3px solid #FFD700;
+        background: var(--surface);
+        border: 1px solid var(--border);
     }
-    
+
+    .team-score.team-accent {
+        border-left: 4px solid var(--accent);
+    }
+
+    .team-score.team-secondary {
+        border-left: 4px solid #14b8a6;
+    }
+
     .winner-banner {
-        background: linear-gradient(135deg, #c41e3a, #165b33);
-        padding: 1rem;
-        border-radius: 10px;
+        background: linear-gradient(135deg, #6366f1, #14b8a6);
+        padding: 1.25rem;
+        border-radius: 12px;
         text-align: center;
         font-size: 1.5rem;
-        font-weight: bold;
+        font-weight: 600;
         margin: 1rem 0;
-        border: 3px solid #FFD700;
         color: white;
+        letter-spacing: -0.01em;
     }
-    
-    .christmas-header {
-        background: linear-gradient(135deg, #c41e3a, #165b33);
-        padding: 1rem;
-        border-radius: 10px;
-        text-align: center;
-        color: white;
-        border: 3px solid #FFD700;
-        margin-bottom: 1rem;
+
+    .page-header {
+        padding: 1.25rem 1.5rem;
+        border-radius: 12px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-left: 4px solid var(--accent);
+        margin-bottom: 1.5rem;
     }
-    
+
+    .page-header h1, .page-header h2 {
+        margin: 0;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+    }
+
+    .page-header p {
+        margin: 0.4rem 0 0 0;
+        color: var(--text-muted);
+        font-size: 0.95rem;
+    }
+
     .game-time {
         font-size: 0.85rem;
-        color: #888;
-        font-style: italic;
+        color: var(--text-muted);
     }
-    
-    /* Sidebar Christmas styling */
+
     [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #165b33 0%, #0d3d22 100%);
-    }
-    
-    [data-testid="stSidebar"] * {
-        color: white !important;
+        background: var(--surface);
+        border-right: 1px solid var(--border);
     }
 </style>
-
-<!-- Snowflakes -->
-<div class="snowflakes" aria-hidden="true">
-    <script>
-        if (!document.getElementById('snowflake-style')) {
-            const style = document.createElement('style');
-            style.id = 'snowflake-style';
-            const snowflakes = ['❄', '❅', '❆', '✻', '✼'];
-            let css = '';
-            for (let i = 0; i < 15; i++) {
-                const left = Math.random() * 100;
-                const delay = Math.random() * 10;
-                const duration = 5 + Math.random() * 10;
-                const size = 0.8 + Math.random() * 1.2;
-                css += `.snowflake:nth-child(${i+1}) { left: ${left}%; animation-delay: ${delay}s; animation-duration: ${duration}s; font-size: ${size}em; }`;
-            }
-            style.textContent = css;
-            document.head.appendChild(style);
-        }
-    </script>
-</div>
 """, unsafe_allow_html=True)
 
-# Add snowflakes to the page
-snowflakes_html = ''.join(['<div class="snowflake">❄</div>' for _ in range(15)])
-st.markdown(f'<div style="position:fixed;width:100%;height:100%;pointer-events:none;z-index:9999;">{snowflakes_html}</div>', unsafe_allow_html=True)
-
-# Sidebar navigation with Christmas theme
-st.sidebar.markdown("### 🎄 Euchre Stats 🎄")
-st.sidebar.markdown("*Christmas Edition*")
+# Sidebar navigation
+st.sidebar.markdown("### 🃏 Euchre Stats")
+st.sidebar.caption("Track. Visualize. Win.")
 st.sidebar.markdown("---")
 
 # Navigation options
@@ -180,7 +170,6 @@ page = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("🎅 *Merry Christmas!* 🎁")
 
 
 def format_game_time(iso_time: str) -> str:
@@ -195,9 +184,9 @@ def format_game_time(iso_time: str) -> str:
 def home_page():
     """Display home page with overview."""
     st.markdown("""
-    <div class="christmas-header">
-        <h1>🎄 Euchre Stats 🎄</h1>
-        <p>Track, visualize, and analyze your Euchre games with custom house rules!</p>
+    <div class="page-header">
+        <h1>🃏 Euchre Stats</h1>
+        <p>Track, visualize, and analyze your Euchre games with custom house rules.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -217,7 +206,7 @@ def home_page():
     st.divider()
     
     # Quick actions
-    st.subheader("🎁 Quick Actions")
+    st.subheader("⚡ Quick Actions")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("➕ Start New Game", use_container_width=True):
@@ -231,7 +220,7 @@ def home_page():
                 st.rerun()
     
     # Recent games
-    st.subheader("🎄 Recent Games")
+    st.subheader("🕐 Recent Games")
     games = db.get_all_games()[:5]
     if games:
         for game in games:
@@ -244,14 +233,14 @@ def home_page():
                 if game['winner']:
                     st.write(f"**Winner:** {game['winner']} 🎉")
     else:
-        st.info("🎁 No games yet. Start a new game to begin tracking!")
+        st.info("No games yet. Start a new game to begin tracking!")
 
 
 def new_game_page():
     """Create a new game."""
     st.markdown("""
-    <div class="christmas-header">
-        <h2>🎄 Start New Game 🎄</h2>
+    <div class="page-header">
+        <h2>➕ Start New Game</h2>
     </div>
     """, unsafe_allow_html=True)
     
@@ -323,15 +312,15 @@ def active_games_page():
                 st.rerun()
     
     st.markdown("""
-    <div class="christmas-header">
-        <h2>🎮 Active Games 🎄</h2>
+    <div class="page-header">
+        <h2>🎮 Active Games</h2>
     </div>
     """, unsafe_allow_html=True)
     
     games = db.get_active_games()
     
     if not games:
-        st.info("🎁 No active games. Start a new game!")
+        st.info("No active games. Start a new game!")
         if st.button("➕ Start New Game"):
             st.session_state['nav_to'] = "➕ New Game"
             st.rerun()
@@ -367,20 +356,20 @@ def active_games_page():
     st.markdown(f"🕐 **Game Started:** {game_time}")
     
     # Display current score
-    st.subheader("🎄 Current Score")
+    st.subheader("📊 Current Score")
     col1, col2 = st.columns(2)
     with col1:
         st.markdown(f"""
-        <div class="team-score" style="background-color: #c41e3a;">
-            <h3 style="color: white; margin: 0;">🎅 {game['team1_name']}</h3>
-            <p class="score-display" style="color: white; margin: 0;">{game['team1_score']}</p>
+        <div class="team-score team-accent">
+            <h3 style="margin: 0; font-weight: 600;">{game['team1_name']}</h3>
+            <p class="score-display" style="margin: 0;">{game['team1_score']}</p>
         </div>
         """, unsafe_allow_html=True)
     with col2:
         st.markdown(f"""
-        <div class="team-score" style="background-color: #165b33;">
-            <h3 style="color: white; margin: 0;">🎄 {game['team2_name']}</h3>
-            <p class="score-display" style="color: white; margin: 0;">{game['team2_score']}</p>
+        <div class="team-score team-secondary">
+            <h3 style="margin: 0; font-weight: 600;">{game['team2_name']}</h3>
+            <p class="score-display" style="margin: 0;">{game['team2_score']}</p>
         </div>
         """, unsafe_allow_html=True)
     
@@ -585,9 +574,9 @@ def active_games_page():
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
                     st.session_state['caller_index'] = 0  # Reset caller to unassigned
                     if is_euchre:
-                        st.session_state['show_success'] = f"❄️ Euchre! Caller loses {points_to_record}, other team gets {other_team_points}!"
+                        st.session_state['show_success'] = f"💥 Euchre! Caller loses {points_to_record}, other team gets {other_team_points}!"
                     else:
-                        st.session_state['show_success'] = "🎄 Hand logged!"
+                        st.session_state['show_success'] = "✅ Hand logged!"
                     trigger_scroll_to_top()
                     st.rerun()
     
@@ -644,15 +633,15 @@ def finished_games_page():
                 st.rerun()
     
     st.markdown("""
-    <div class="christmas-header">
-        <h2>🏆 Finished Games 🎄</h2>
+    <div class="page-header">
+        <h2>🏆 Finished Games</h2>
     </div>
     """, unsafe_allow_html=True)
-    
+
     games = db.get_finished_games()
-    
+
     if not games:
-        st.info("🎁 No finished games yet.")
+        st.info("No finished games yet.")
         return
     
     for game in games:
@@ -666,7 +655,7 @@ def finished_games_page():
             # Winner banner
             st.markdown(f"""
             <div class="winner-banner">
-                🎄 {game['winner']} Wins! 🎄
+                🏆 {game['winner']} Wins!
             </div>
             """, unsafe_allow_html=True)
             
@@ -921,15 +910,15 @@ def finished_games_page():
 def statistics_page():
     """Display overall statistics."""
     st.markdown("""
-    <div class="christmas-header">
-        <h2>📊 Statistics 🎄</h2>
+    <div class="page-header">
+        <h2>📊 Statistics</h2>
     </div>
     """, unsafe_allow_html=True)
-    
+
     # Overall stats
     stats = analytics.get_all_games_stats()
-    
-    st.subheader("🎄 Overview")
+
+    st.subheader("📈 Overview")
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
         st.metric("🎮 Total Games", stats['total_games'])
@@ -940,10 +929,10 @@ def statistics_page():
     with col4:
         st.metric("🃏 Total Hands", stats['total_hands'])
     with col5:
-        st.metric("❄️ Total Euchres", stats['total_euchres'])
-    
+        st.metric("💥 Total Euchres", stats['total_euchres'])
+
     if stats['total_games'] == 0:
-        st.info("🎁 Play some games to see statistics!")
+        st.info("Play some games to see statistics!")
         return
     
     st.divider()
@@ -957,7 +946,7 @@ def statistics_page():
     st.divider()
     
     # Call value statistics
-    st.subheader("🎄 Call Value Statistics")
+    st.subheader("📞 Call Value Statistics")
     call_stats = analytics.get_call_value_stats()
     if not call_stats.empty:
         st.dataframe(call_stats, use_container_width=True, hide_index=True)
@@ -968,7 +957,7 @@ def statistics_page():
     st.divider()
     
     # Player statistics
-    st.subheader("🎅 Player Statistics")
+    st.subheader("👤 Player Statistics")
     player_stats = analytics.get_player_stats()
     if not player_stats.empty:
         st.dataframe(player_stats, use_container_width=True, hide_index=True)
@@ -987,7 +976,7 @@ def statistics_page():
     st.divider()
     
     # Team statistics
-    st.subheader("🎁 Team Statistics")
+    st.subheader("👥 Team Statistics")
     team_stats = analytics.get_team_stats()
     if not team_stats.empty:
         st.dataframe(team_stats, use_container_width=True, hide_index=True)
