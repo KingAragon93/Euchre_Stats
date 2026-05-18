@@ -5,7 +5,7 @@ Euchre Stats - A Streamlit app for tracking and analyzing Euchre games.
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
-import json
+import io
 from datetime import datetime
 import database_firestore as db
 import analytics
@@ -37,33 +37,34 @@ def queue_announcement(team1_name: str, team1_score: int, team2_name: str, team2
     )
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def _synthesize_speech(text: str) -> bytes:
+    """Render `text` to MP3 bytes via gTTS. Cached by text so repeated identical
+    announcements (rare, but possible) avoid a second roundtrip to Google."""
+    from gtts import gTTS  # imported lazily so app still loads if the dep is missing
+    buf = io.BytesIO()
+    gTTS(text=text, lang='en', tld='co.uk').write_to_fp(buf)
+    return buf.getvalue()
+
+
 def check_and_speak():
-    """If a score announcement is queued and the herald is enabled, speak it."""
+    """If a score announcement is queued and the herald is enabled, render it
+    to MP3 and stream it via an autoplay <audio> element."""
     text = st.session_state.pop('speak_text', None)
     if not text or not st.session_state.get('herald_voice', True):
         return
-    payload = json.dumps(text)
-    components.html(
-        f"""
-        <script>
-        (function() {{
-            try {{
-                if (!('speechSynthesis' in window)) return;
-                const utter = new SpeechSynthesisUtterance({payload});
-                utter.lang = 'en-US';
-                utter.rate = 0.95;
-                utter.pitch = 1.0;
-                utter.volume = 1.0;
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(utter);
-            }} catch (e) {{
-                console.error('Herald error:', e);
-            }}
-        }})();
-        </script>
-        """,
-        height=0,
+    try:
+        audio_bytes = _synthesize_speech(text)
+    except Exception as e:
+        # Network/TTS failure shouldn't break the app — fail silently.
+        print(f"Herald TTS error: {e}")
+        return
+    # Hide the audio player chrome; autoplay still fires.
+    st.markdown(
+        "<style>div[data-testid='stAudio']{display:none !important;}</style>",
+        unsafe_allow_html=True,
     )
+    st.audio(audio_bytes, format='audio/mp3', autoplay=True)
 
 # Initialize database connection
 db.init_database()
