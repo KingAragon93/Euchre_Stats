@@ -5,11 +5,30 @@ Euchre Stats - A Streamlit app for tracking and analyzing Euchre games.
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import base64
 import io
+import logging
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime
 import database_firestore as db
 import analytics
 from models import COMMON_CALL_VALUES
+
+logger = logging.getLogger(__name__)
+
+# Page config must be the first Streamlit command — keep it ahead of the
+# @st.cache_data decorator below so newer Streamlit versions that treat
+# decorator registration as a "Streamlit command" don't reject startup.
+st.set_page_config(
+    page_title="The Maester's Ledger — Euchre Chronicle",
+    page_icon="🏰",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Initialize database connection
+db.init_database()
+
 
 # Helper to scroll to top of page (call this at start of page to check if scroll needed)
 def check_scroll_to_top():
@@ -37,45 +56,52 @@ def queue_announcement(team1_name: str, team1_score: int, team2_name: str, team2
     )
 
 
-@st.cache_data(show_spinner=False, max_entries=64)
-def _synthesize_speech(text: str) -> bytes:
-    """Render `text` to MP3 bytes via gTTS. Cached by text so repeated identical
-    announcements (rare, but possible) avoid a second roundtrip to Google."""
+def _gtts_render(text: str) -> bytes:
+    """Synthesize `text` to MP3 bytes via gTTS. Runs inside a worker thread so
+    callers can enforce a timeout."""
     from gtts import gTTS  # imported lazily so app still loads if the dep is missing
     buf = io.BytesIO()
     gTTS(text=text, lang='en', tld='co.uk').write_to_fp(buf)
     return buf.getvalue()
 
 
+@st.cache_data(show_spinner=False, max_entries=64)
+def _synthesize_speech(text: str) -> bytes:
+    """Render `text` to MP3 bytes with a 4s timeout so a slow upstream can't
+    hang the Streamlit render thread. Cached per-text."""
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(_gtts_render, text).result(timeout=4.0)
+
+
 def check_and_speak():
     """If a score announcement is queued and the herald is enabled, render it
-    to MP3 and stream it via an autoplay <audio> element."""
+    to MP3 and play it via an inline autoplay <audio> element."""
     text = st.session_state.pop('speak_text', None)
     if not text or not st.session_state.get('herald_voice', True):
         return
     try:
         audio_bytes = _synthesize_speech(text)
-    except Exception as e:
-        # Network/TTS failure shouldn't break the app — fail silently.
-        print(f"Herald TTS error: {e}")
+    except FuturesTimeout:
+        logger.warning("Herald TTS timed out (text=%r)", text)
         return
-    # Hide the audio player chrome; autoplay still fires.
+    except Exception as e:
+        logger.warning("Herald TTS error: %s", e)
+        return
+
+    # Inline <audio> via st.markdown renders in the main page (inheriting the
+    # document's gesture activation) and, without a `controls` attribute, has
+    # no visual chrome — so no global CSS hide rule is needed. The data-herald
+    # marker makes the markdown content unique per render, so Streamlit
+    # re-emits the element and the browser fires autoplay every time, even
+    # when the MP3 bytes themselves are a cache hit from identical prior text.
+    counter = st.session_state.get('herald_counter', 0) + 1
+    st.session_state['herald_counter'] = counter
+    b64 = base64.b64encode(audio_bytes).decode('ascii')
     st.markdown(
-        "<style>div[data-testid='stAudio']{display:none !important;}</style>",
+        f'<audio autoplay data-herald="{counter}" '
+        f'src="data:audio/mp3;base64,{b64}"></audio>',
         unsafe_allow_html=True,
     )
-    st.audio(audio_bytes, format='audio/mp3', autoplay=True)
-
-# Initialize database connection
-db.init_database()
-
-# Page config
-st.set_page_config(
-    page_title="The Maester's Ledger — Euchre Chronicle",
-    page_icon="🏰",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
 
 # Mediterranean × Game of Thrones theme — stone keep meets the Aegean
 st.markdown("""
