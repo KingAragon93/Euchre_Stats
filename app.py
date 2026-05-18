@@ -5,6 +5,7 @@ Euchre Stats - A Streamlit app for tracking and analyzing Euchre games.
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
+import json
 from datetime import datetime
 import database_firestore as db
 import analytics
@@ -27,6 +28,42 @@ def check_scroll_to_top():
 def trigger_scroll_to_top():
     """Set flag to scroll to top on next rerun."""
     st.session_state['scroll_to_top'] = True
+
+
+def queue_announcement(team1_name: str, team1_score: int, team2_name: str, team2_score: int):
+    """Stash a score announcement to be spoken on the next rerun."""
+    st.session_state['speak_text'] = (
+        f"{team1_name}, {team1_score}. {team2_name}, {team2_score}."
+    )
+
+
+def check_and_speak():
+    """If a score announcement is queued and the herald is enabled, speak it."""
+    text = st.session_state.pop('speak_text', None)
+    if not text or not st.session_state.get('herald_voice', True):
+        return
+    payload = json.dumps(text)
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            try {{
+                if (!('speechSynthesis' in window)) return;
+                const utter = new SpeechSynthesisUtterance({payload});
+                utter.lang = 'en-US';
+                utter.rate = 0.95;
+                utter.pitch = 1.0;
+                utter.volume = 1.0;
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(utter);
+            }} catch (e) {{
+                console.error('Herald error:', e);
+            }}
+        }})();
+        </script>
+        """,
+        height=0,
+    )
 
 # Initialize database connection
 db.init_database()
@@ -288,6 +325,14 @@ page = st.sidebar.radio(
 
 st.sidebar.markdown("---")
 
+# Herald's Voice — read the score aloud after each hand
+st.sidebar.toggle(
+    "🔊 Herald's Voice",
+    value=st.session_state.get('herald_voice', True),
+    key='herald_voice',
+    help="Have a herald proclaim the score after each hand is inscribed.",
+)
+
 
 def format_game_time(iso_time: str) -> str:
     """Format ISO time string to readable format."""
@@ -517,6 +562,10 @@ def active_games_page():
                         notes=pending['notes'],
                         auto_finish=True  # This will finish the game
                     )
+                    queue_announcement(
+                        game['team1_name'], pending.get('new_team1_score', game['team1_score']),
+                        game['team2_name'], pending.get('new_team2_score', game['team2_score']),
+                    )
                     st.session_state['pending_game_end'] = None
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
                     st.session_state['caller_index'] = 0  # Reset caller to unassigned
@@ -671,7 +720,9 @@ def active_games_page():
                         'notes': notes if notes else None,
                         'winner': potential_winner,
                         'winning_score': winning_score,
-                        'losing_score': losing_score
+                        'losing_score': losing_score,
+                        'new_team1_score': new_team1_score,
+                        'new_team2_score': new_team2_score,
                     }
                     st.rerun()
                 else:
@@ -692,6 +743,10 @@ def active_games_page():
                         st.session_state['show_success'] = f"🔥 By the Old Gods — euchred! The caller loses {points_to_record}, the rival House claims {other_team_points}."
                     else:
                         st.session_state['show_success'] = "📜 The hand is inscribed."
+                    queue_announcement(
+                        game['team1_name'], new_team1_score,
+                        game['team2_name'], new_team2_score,
+                    )
                     trigger_scroll_to_top()
                     st.rerun()
 
@@ -1092,3 +1147,6 @@ elif page == "📜 Hall of Victories":
     finished_games_page()
 elif page == "🦅 The Maester's Ledger":
     statistics_page()
+
+# Fire any queued herald announcement after the page has rendered
+check_and_speak()
