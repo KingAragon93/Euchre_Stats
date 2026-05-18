@@ -10,8 +10,10 @@ import io
 import logging
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime
+from typing import Optional
 import database_firestore as db
 import analytics
+import insights
 from models import COMMON_CALL_VALUES
 
 logger = logging.getLogger(__name__)
@@ -49,11 +51,59 @@ def trigger_scroll_to_top():
     st.session_state['scroll_to_top'] = True
 
 
-def queue_announcement(team1_name: str, team1_score: int, team2_name: str, team2_score: int):
-    """Stash a score announcement to be spoken on the next rerun."""
-    st.session_state['speak_text'] = (
-        f"{team1_name}, {team1_score}. {team2_name}, {team2_score}."
+def queue_announcement(
+    team1_name: str,
+    team1_score: int,
+    team2_name: str,
+    team2_score: int,
+    extra_fact: Optional[str] = None,
+):
+    """Stash a score announcement to be spoken on the next rerun. If
+    `extra_fact` is given, it's appended as a second sentence."""
+    base = f"{team1_name}, {team1_score}. {team2_name}, {team2_score}."
+    if extra_fact:
+        base = f"{base} {extra_fact}"
+    st.session_state['speak_text'] = base
+
+
+_COMMENTARY_OPTIONS = {
+    "Off": None,
+    "Often (every 2 hands)": 2,
+    "Sometimes (every 4 hands)": 4,
+    "Rarely (every 8 hands)": 8,
+}
+
+
+def _commentary_interval() -> Optional[int]:
+    """Translate the sidebar selection into the hand interval, or None for off."""
+    return _COMMENTARY_OPTIONS.get(
+        st.session_state.get('herald_commentary', "Sometimes (every 4 hands)")
     )
+
+
+def maybe_pick_commentary(game_id: str) -> Optional[str]:
+    """Per-saga counter: when it trips, ask insights for a fact. Reset the
+    counter only if a fact is actually returned, so an empty stretch of
+    history doesn't permanently silence the commentary."""
+    interval = _commentary_interval()
+    if interval is None:
+        return None
+    counter = st.session_state.get('herald_fact_counter', 0) + 1
+    if counter < interval:
+        st.session_state['herald_fact_counter'] = counter
+        return None
+    # counter tripped — try to pick a fact
+    recent = st.session_state.get('herald_recent_facts', [])
+    picked = insights.pick_fact_for_hand(game_id, set(recent[-3:]))
+    if not picked:
+        # leave counter at its current value so we try again next hand
+        st.session_state['herald_fact_counter'] = counter
+        return None
+    key, text = picked
+    recent.append(key)
+    st.session_state['herald_recent_facts'] = recent[-10:]
+    st.session_state['herald_fact_counter'] = 0
+    return text
 
 
 def _gtts_render(text: str) -> bytes:
@@ -360,6 +410,19 @@ st.sidebar.toggle(
     help="Have a herald proclaim the score after each hand is inscribed.",
 )
 
+# Herald commentary — occasional color-commentary about the caller's stats
+st.sidebar.select_slider(
+    "🗣 Herald Commentary",
+    options=list(_COMMENTARY_OPTIONS.keys()),
+    value=st.session_state.get('herald_commentary', "Sometimes (every 4 hands)"),
+    key='herald_commentary',
+    help=(
+        "How often the herald interjects with a factoid about the caller — "
+        "their tendencies, success rate on this call, streaks, lead changes, "
+        "lifetime milestones, and more."
+    ),
+)
+
 
 def format_game_time(iso_time: str) -> str:
     """Format ISO time string to readable format."""
@@ -592,6 +655,7 @@ def active_games_page():
                     queue_announcement(
                         game['team1_name'], pending.get('new_team1_score', game['team1_score']),
                         game['team2_name'], pending.get('new_team2_score', game['team2_score']),
+                        extra_fact=maybe_pick_commentary(game_id),
                     )
                     st.session_state['pending_game_end'] = None
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
@@ -773,6 +837,7 @@ def active_games_page():
                     queue_announcement(
                         game['team1_name'], new_team1_score,
                         game['team2_name'], new_team2_score,
+                        extra_fact=maybe_pick_commentary(game_id),
                     )
                     trigger_scroll_to_top()
                     st.rerun()
