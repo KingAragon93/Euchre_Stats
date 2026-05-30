@@ -267,6 +267,36 @@ def fact_realm_call_average(ctx: HandContext) -> Optional[str]:
     return None
 
 
+def fact_call_recap(ctx: HandContext) -> Optional[str]:
+    """Always-fires baseline. Used only as a last-resort fallback inside
+    pick_fact_for_hand when no notable, threshold-based generator applies —
+    so the herald always has *something* stat-flavored to say.
+
+    NOT included in FACT_GENERATORS; the picker invokes it directly.
+    """
+    ph = _player_hands(ctx.all_hands_df, ctx.player)
+    career = len(ph)
+    saga = sum(1 for h in ctx.prior_hands if h['caller_name'] == ctx.player) + 1
+
+    if ctx.is_euchre:
+        if career >= 5:
+            eu_pct = _pct(int(ph['is_euchre'].astype(bool).sum()), career)
+            return (
+                f"{ctx.player} is euchred — roughly {eu_pct} percent of "
+                f"their career calls end this way."
+            )
+        return f"{ctx.player}'s call of {ctx.call} ends in a euchre."
+
+    if career == 1:
+        return f"{ctx.player}'s first call across the realm earns {ctx.points} points."
+    if saga == 1:
+        return f"{ctx.player}'s first call of the saga earns {ctx.points} points."
+    return (
+        f"{ctx.player}'s call of {ctx.call} earns {ctx.points} points — "
+        f"their {_ordinal(saga)} call this saga."
+    )
+
+
 # ---------- picker ----------
 
 FactFn = Callable[[HandContext], Optional[str]]
@@ -293,6 +323,10 @@ def pick_fact_for_hand(
     """Return (generator_name, spoken_text) for an interesting fact about the
     most recent hand in `game_id`, or None if nothing notable applies. Pass
     the set of recently-spoken generator names to suppress immediate repeats.
+
+    Falls back to fact_call_recap (an always-fires stat-flavored line) when
+    none of the threshold-based generators apply, so the herald always has
+    something to say. The recap generator is not bound by recently_spoken_keys.
     """
     if recently_spoken_keys is None:
         recently_spoken_keys = set()
@@ -312,6 +346,7 @@ def pick_fact_for_hand(
 
     ctx = HandContext(game=game, hand=latest, prior_hands=prior, all_hands_df=all_hands_df)
 
+    # First pass: notable generators, filtered to avoid immediate repeats
     candidates: List[Tuple[str, str]] = []
     for gen in FACT_GENERATORS:
         try:
@@ -325,6 +360,27 @@ def pick_fact_for_hand(
             continue
         candidates.append((key, text))
 
-    if not candidates:
-        return None
-    return random.choice(candidates)
+    if candidates:
+        return random.choice(candidates)
+
+    # Second pass: relax the "recently spoken" filter — better to repeat than
+    # be silent during long droughts of notable facts.
+    relaxed: List[Tuple[str, str]] = []
+    for gen in FACT_GENERATORS:
+        try:
+            text = gen(ctx)
+        except Exception:
+            text = None
+        if text:
+            relaxed.append((gen.__name__, text))
+    if relaxed:
+        return random.choice(relaxed)
+
+    # Last resort: always-fires recap so the herald has something to say.
+    try:
+        recap = fact_call_recap(ctx)
+        if recap:
+            return ("fact_call_recap", recap)
+    except Exception:
+        pass
+    return None

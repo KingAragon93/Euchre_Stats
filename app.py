@@ -68,23 +68,32 @@ def queue_announcement(
 
 _COMMENTARY_OPTIONS = {
     "Off": None,
+    "Every hand": 1,
     "Often (every 2 hands)": 2,
     "Sometimes (every 4 hands)": 4,
     "Rarely (every 8 hands)": 8,
 }
 
+_COMMENTARY_DEFAULT = "Every hand"
+
 
 def _commentary_interval() -> Optional[int]:
     """Translate the sidebar selection into the hand interval, or None for off."""
     return _COMMENTARY_OPTIONS.get(
-        st.session_state.get('herald_commentary', "Sometimes (every 4 hands)")
+        st.session_state.get('herald_commentary', _COMMENTARY_DEFAULT)
     )
 
 
 def maybe_pick_commentary(game_id: str) -> Optional[str]:
     """Per-saga counter: when it trips, ask insights for a fact. Reset the
     counter only if a fact is actually returned, so an empty stretch of
-    history doesn't permanently silence the commentary."""
+    history doesn't permanently silence the commentary.
+
+    The picker now falls back to an always-fires recap when no notable fact
+    applies, so under normal use this will return text every time the counter
+    trips. `fact_call_recap` is intentionally excluded from the recent-facts
+    rotation guard so it can fire back-to-back during fact droughts.
+    """
     interval = _commentary_interval()
     if interval is None:
         return None
@@ -92,16 +101,20 @@ def maybe_pick_commentary(game_id: str) -> Optional[str]:
     if counter < interval:
         st.session_state['herald_fact_counter'] = counter
         return None
-    # counter tripped — try to pick a fact
     recent = st.session_state.get('herald_recent_facts', [])
     picked = insights.pick_fact_for_hand(game_id, set(recent[-3:]))
+    logger.info(
+        "Herald commentary: counter=%d/%d picked=%s",
+        counter, interval,
+        picked[0] if picked else "NONE",
+    )
     if not picked:
-        # leave counter at its current value so we try again next hand
         st.session_state['herald_fact_counter'] = counter
         return None
     key, text = picked
-    recent.append(key)
-    st.session_state['herald_recent_facts'] = recent[-10:]
+    if key != "fact_call_recap":
+        recent.append(key)
+        st.session_state['herald_recent_facts'] = recent[-10:]
     st.session_state['herald_fact_counter'] = 0
     return text
 
@@ -410,16 +423,17 @@ st.sidebar.toggle(
     help="Have a herald proclaim the score after each hand is inscribed.",
 )
 
-# Herald commentary — occasional color-commentary about the caller's stats
+# Herald commentary — color-commentary about the caller's stats
 st.sidebar.select_slider(
     "🗣 Herald Commentary",
     options=list(_COMMENTARY_OPTIONS.keys()),
-    value=st.session_state.get('herald_commentary', "Sometimes (every 4 hands)"),
+    value=st.session_state.get('herald_commentary', _COMMENTARY_DEFAULT),
     key='herald_commentary',
     help=(
         "How often the herald interjects with a factoid about the caller — "
         "their tendencies, success rate on this call, streaks, lead changes, "
-        "lifetime milestones, and more."
+        "lifetime milestones, and more. If no notable fact applies, the "
+        "herald falls back to a stat-flavored recap of the hand."
     ),
 )
 
