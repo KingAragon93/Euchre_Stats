@@ -548,7 +548,27 @@ def end_of_game_summary(game_id: str) -> Optional[str]:
     if big:
         name, pts, call = big
         if pts >= 5:
-            parts.append(f"The mightiest hand was {name}'s call of {call}, worth {pts} points.")
+            # If the final hand WAS the mightiest of the saga, narrate it as a
+            # celebration of what just happened. Otherwise frame it as a
+            # retrospective so listeners don't hear "X's call of 5" right after
+            # someone called 4 and think it's a stat about the current call.
+            latest = hands[-1]
+            is_final = (
+                str(latest.get('call_value')) == str(call)
+                and latest.get('caller_name') == name
+                and not bool(latest.get('is_euchre'))
+                and int(latest.get('points_scored', 0)) == pts
+            )
+            if is_final:
+                parts.append(
+                    f"The mightiest hand was {name}'s call of {call}, "
+                    f"worth {pts} points."
+                )
+            else:
+                parts.append(
+                    f"Earlier in the saga, {name}'s call of {call} brought "
+                    f"the mightiest hand at {pts} points."
+                )
 
     # Euchre count, only if notable
     euchres = sum(1 for h in hands if h['is_euchre'])
