@@ -102,18 +102,28 @@ def _leader_team_name(game: dict, t1: int, t2: int) -> Optional[str]:
 # ---------- fact generators ----------
 
 def fact_favorite_call(ctx: HandContext) -> Optional[str]:
-    """Player's most-frequent call across all sagas."""
+    """Player's most-frequent call across all sagas, paired with their
+    success rate on that call so it's clear which percentage is which."""
     ph = _player_hands(ctx.all_hands_df, ctx.player)
     if len(ph) < 5:
         return None
     counts = ph['call_value'].value_counts()
     fav = counts.index[0]
-    pct = _pct(counts.iloc[0], len(ph))
-    if pct < 30:
+    freq_pct = _pct(counts.iloc[0], len(ph))
+    if freq_pct < 30:
         return None
+    fav_hands = ph[ph['call_value'] == fav]
+    success_pct = _pct(int((~fav_hands['is_euchre'].astype(bool)).sum()), len(fav_hands))
     if str(fav) == str(ctx.call):
-        return f"{ctx.player} calls {fav}, as they do {pct} percent of the time."
-    return f"{ctx.player}'s most-favored call across the realm is {fav}, made {pct} percent of the time."
+        return (
+            f"{ctx.player} calls {fav} — that's {freq_pct} percent of their "
+            f"calls, and they succeed on {success_pct} percent of them."
+        )
+    return (
+        f"{ctx.player}'s favored call across the realm is {fav}, making up "
+        f"{freq_pct} percent of their calls with a {success_pct} percent "
+        f"success rate."
+    )
 
 
 def fact_career_call_success(ctx: HandContext) -> Optional[str]:
@@ -125,9 +135,15 @@ def fact_career_call_success(ctx: HandContext) -> Optional[str]:
     success = int((~matches['is_euchre'].astype(bool)).sum())
     success_pct = _pct(success, len(matches))
     if success_pct >= 70:
-        return f"{ctx.player} succeeds {success_pct} percent of the time on a call of {ctx.call}."
+        return (
+            f"{ctx.player} is successful on {success_pct} percent of their "
+            f"calls of {ctx.call}."
+        )
     if success_pct <= 40:
-        return f"{ctx.player} gets euchred {100 - success_pct} percent of the time when calling {ctx.call}."
+        return (
+            f"{ctx.player} is euchred on {100 - success_pct} percent of their "
+            f"calls of {ctx.call}."
+        )
     return None
 
 
@@ -224,7 +240,10 @@ def fact_partnership_record(ctx: HandContext) -> Optional[str]:
     if paired < 3:
         return None
     pct = _pct(won, paired)
-    return f"{ctx.player} and {partner} have won {pct} percent of the sagas they've fought together."
+    return (
+        f"{ctx.player} and {partner} have won {won} of the {paired} sagas "
+        f"they've fought together — a {pct} percent win rate."
+    )
 
 
 def fact_lifetime_net_points(ctx: HandContext) -> Optional[str]:
@@ -257,13 +276,21 @@ def fact_realm_call_average(ctx: HandContext) -> Optional[str]:
     ph = _player_hands(ctx.all_hands_df, ctx.player)
     if len(ph) < 8 or ctx.all_hands_df.empty:
         return None
-    player_success = _pct((~ph['is_euchre'].astype(bool)).sum(), len(ph))
-    realm_success = _pct((~ctx.all_hands_df['is_euchre'].astype(bool)).sum(), len(ctx.all_hands_df))
-    diff = player_success - realm_success
+    player_success_pct = _pct((~ph['is_euchre'].astype(bool)).sum(), len(ph))
+    realm_success_pct = _pct((~ctx.all_hands_df['is_euchre'].astype(bool)).sum(), len(ctx.all_hands_df))
+    diff = player_success_pct - realm_success_pct
     if diff >= 15:
-        return f"{ctx.player} succeeds on calls {diff} points more often than the realm's average."
+        return (
+            f"{ctx.player} is successful on {player_success_pct} percent of "
+            f"their calls, well above the realm's {realm_success_pct} percent "
+            f"average."
+        )
     if diff <= -15:
-        return f"{ctx.player} is euchred {-diff} points more often than the realm's average."
+        return (
+            f"{ctx.player} is euchred on {100 - player_success_pct} percent of "
+            f"their calls, versus the realm's {100 - realm_success_pct} percent "
+            f"average."
+        )
     return None
 
 
@@ -282,8 +309,8 @@ def fact_call_recap(ctx: HandContext) -> Optional[str]:
         if career >= 5:
             eu_pct = _pct(int(ph['is_euchre'].astype(bool).sum()), career)
             return (
-                f"{ctx.player} is euchred — roughly {eu_pct} percent of "
-                f"their career calls end this way."
+                f"{ctx.player} is euchred — they're euchred on {eu_pct} percent "
+                f"of all their calls."
             )
         return f"{ctx.player}'s call of {ctx.call} ends in a euchre."
 
