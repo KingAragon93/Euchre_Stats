@@ -102,27 +102,25 @@ def _leader_team_name(game: dict, t1: int, t2: int) -> Optional[str]:
 # ---------- fact generators ----------
 
 def fact_favorite_call(ctx: HandContext) -> Optional[str]:
-    """Player's most-frequent call across all sagas, paired with their
-    success rate on that call so it's clear which percentage is which."""
+    """Player's most-frequent call across all sagas — only fires when the
+    favorite *matches* what they just called, so we never narrate a stat
+    about a different call value than the one just made.
+    """
     ph = _player_hands(ctx.all_hands_df, ctx.player)
     if len(ph) < 5:
         return None
     counts = ph['call_value'].value_counts()
     fav = counts.index[0]
+    if str(fav) != str(ctx.call):
+        return None
     freq_pct = _pct(counts.iloc[0], len(ph))
     if freq_pct < 30:
         return None
     fav_hands = ph[ph['call_value'] == fav]
     success_pct = _pct(int((~fav_hands['is_euchre'].astype(bool)).sum()), len(fav_hands))
-    if str(fav) == str(ctx.call):
-        return (
-            f"{ctx.player} calls {fav} — that's {freq_pct} percent of their "
-            f"calls, and they succeed on {success_pct} percent of them."
-        )
     return (
-        f"{ctx.player}'s favored call across the realm is {fav}, making up "
-        f"{freq_pct} percent of their calls with a {success_pct} percent "
-        f"success rate."
+        f"{ctx.player} calls {fav} — that's {freq_pct} percent of their "
+        f"calls, and they succeed on {success_pct} percent of them."
     )
 
 
@@ -294,6 +292,37 @@ def fact_realm_call_average(ctx: HandContext) -> Optional[str]:
     return None
 
 
+def fact_player_vs_realm_on_call(ctx: HandContext) -> Optional[str]:
+    """Compare caller's success rate on this specific call value to the rest
+    of the realm's success rate on the same call. Call-relevant by design —
+    never mentions a different call value than the one just made.
+    """
+    df = ctx.all_hands_df
+    if df.empty:
+        return None
+    same_call = df[df['call_value'].astype(str) == str(ctx.call)]
+    player_on_call = same_call[same_call['caller_name'] == ctx.player]
+    others_on_call = same_call[same_call['caller_name'] != ctx.player]
+    if len(player_on_call) < 3 or len(others_on_call) < 3:
+        return None
+    player_pct = _pct(int((~player_on_call['is_euchre'].astype(bool)).sum()), len(player_on_call))
+    realm_pct = _pct(int((~others_on_call['is_euchre'].astype(bool)).sum()), len(others_on_call))
+    diff = player_pct - realm_pct
+    if diff >= 15:
+        return (
+            f"{ctx.player} is successful on {player_pct} percent of their "
+            f"calls of {ctx.call}, compared to {realm_pct} percent for the "
+            f"rest of the realm."
+        )
+    if diff <= -15:
+        return (
+            f"{ctx.player} is euchred on {100 - player_pct} percent of their "
+            f"calls of {ctx.call}, while the rest of the realm is euchred "
+            f"only {100 - realm_pct} percent of the time on the same call."
+        )
+    return None
+
+
 def fact_call_recap(ctx: HandContext) -> Optional[str]:
     """Always-fires baseline. Used only as a last-resort fallback inside
     pick_fact_for_hand when no notable, threshold-based generator applies —
@@ -340,6 +369,7 @@ FACT_GENERATORS: List[FactFn] = [
     fact_lifetime_net_points,
     fact_this_call_this_saga,
     fact_realm_call_average,
+    fact_player_vs_realm_on_call,
 ]
 
 
