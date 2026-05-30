@@ -384,3 +384,123 @@ def pick_fact_for_hand(
     except Exception:
         pass
     return None
+
+
+# ---------- end-of-game recap ----------
+
+def _top_scorer_of_game(hands: list) -> Optional[Tuple[str, int, int]]:
+    """(player_name, net_points, call_count) for the top net scorer in the saga."""
+    if not hands:
+        return None
+    by_player: dict = {}
+    for h in hands:
+        name = h['caller_name']
+        net, count = by_player.get(name, (0, 0))
+        count += 1
+        if h['is_euchre']:
+            net -= int(h['points_scored'])
+        else:
+            net += int(h['points_scored'])
+        by_player[name] = (net, count)
+    if not by_player:
+        return None
+    name, (net, count) = max(by_player.items(), key=lambda kv: kv[1][0])
+    return name, net, count
+
+
+def _biggest_successful_hand(hands: list) -> Optional[Tuple[str, int, str]]:
+    """(player_name, points_scored, call_value) for the largest non-euchre hand."""
+    successes = [h for h in hands if not h['is_euchre']]
+    if not successes:
+        return None
+    big = max(successes, key=lambda h: int(h['points_scored']))
+    return big['caller_name'], int(big['points_scored']), str(big['call_value'])
+
+
+def _largest_winner_deficit(hands: list, winner_team_key: str) -> int:
+    """Max deficit the winning team faced at any point during the saga."""
+    max_deficit = 0
+    for h in hands:
+        if winner_team_key == 'team1':
+            deficit = int(h['team2_cumulative']) - int(h['team1_cumulative'])
+        else:
+            deficit = int(h['team1_cumulative']) - int(h['team2_cumulative'])
+        if deficit > max_deficit:
+            max_deficit = deficit
+    return max_deficit
+
+
+def end_of_game_summary(game_id: str) -> Optional[str]:
+    """Build a multi-sentence spoken recap for a freshly finished game.
+
+    Always announces winner + final score; conditionally appends saga length,
+    MVP, biggest hand, euchre count, and comeback note when the underlying
+    data clears modest thresholds. Returns None only if the game is missing
+    or has no hands recorded.
+    """
+    game = db.get_game(game_id)
+    if not game:
+        return None
+    hands = db.get_hands(game_id)
+    if not hands:
+        return None
+
+    # Identify winner — prefer stored field, fall back to current scores
+    winner = game.get('winner')
+    t1_score = int(game.get('team1_score') or 0)
+    t2_score = int(game.get('team2_score') or 0)
+    if not winner:
+        if t1_score > t2_score:
+            winner = game['team1_name']
+        elif t2_score > t1_score:
+            winner = game['team2_name']
+        else:
+            return None
+
+    if winner == game['team1_name']:
+        winner_key = 'team1'
+        winner_score, loser_score = t1_score, t2_score
+        loser_name = game['team2_name']
+    else:
+        winner_key = 'team2'
+        winner_score, loser_score = t2_score, t1_score
+        loser_name = game['team1_name']
+
+    parts: List[str] = []
+
+    # Required: winner + final score
+    parts.append(
+        f"Victory! {winner} triumphs over {loser_name}, "
+        f"{winner_score} to {loser_score}."
+    )
+
+    # Saga length
+    parts.append(f"The saga ran {len(hands)} hands.")
+
+    # MVP — top net scorer
+    mvp = _top_scorer_of_game(hands)
+    if mvp:
+        name, net, count = mvp
+        if net > 0:
+            parts.append(f"{name} led all callers with {net} net points across {count} calls.")
+        elif net == 0:
+            parts.append(f"{name} called {count} times for a net of zero.")
+
+    # Mightiest single hand
+    big = _biggest_successful_hand(hands)
+    if big:
+        name, pts, call = big
+        if pts >= 5:
+            parts.append(f"The mightiest hand was {name}'s call of {call}, worth {pts} points.")
+
+    # Euchre count, only if notable
+    euchres = sum(1 for h in hands if h['is_euchre'])
+    if euchres >= 2:
+        parts.append(f"{euchres} hands ended in euchres.")
+
+    # Comeback note
+    deficit = _largest_winner_deficit(hands, winner_key)
+    if deficit >= 5:
+        parts.append(f"At one point, {winner} trailed by {deficit} before fighting back.")
+
+    return " ".join(parts)

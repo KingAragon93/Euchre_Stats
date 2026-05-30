@@ -133,7 +133,9 @@ def _synthesize_speech(text: str) -> bytes:
     """Render `text` to MP3 bytes with a 4s timeout so a slow upstream can't
     hang the Streamlit render thread. Cached per-text."""
     with ThreadPoolExecutor(max_workers=1) as ex:
-        return ex.submit(_gtts_render, text).result(timeout=4.0)
+        # 10s accommodates the longer end-of-game recap, which gTTS internally
+        # splits into multiple short requests when the text crosses ~100 chars.
+        return ex.submit(_gtts_render, text).result(timeout=10.0)
 
 
 def check_and_speak():
@@ -666,11 +668,19 @@ def active_games_page():
                         notes=pending['notes'],
                         auto_finish=True  # This will finish the game
                     )
-                    queue_announcement(
-                        game['team1_name'], pending.get('new_team1_score', game['team1_score']),
-                        game['team2_name'], pending.get('new_team2_score', game['team2_score']),
-                        extra_fact=maybe_pick_commentary(game_id),
-                    )
+                    # End of saga: speak the full recap (winner, score, MVP,
+                    # biggest hand, comeback note, etc.) instead of the usual
+                    # score-plus-commentary line. Reset the commentary counter
+                    # too so the next saga starts fresh.
+                    summary = insights.end_of_game_summary(pending['game_id'])
+                    if summary:
+                        st.session_state['speak_text'] = summary
+                    else:
+                        queue_announcement(
+                            game['team1_name'], pending.get('new_team1_score', game['team1_score']),
+                            game['team2_name'], pending.get('new_team2_score', game['team2_score']),
+                        )
+                    st.session_state['herald_fact_counter'] = 0
                     st.session_state['pending_game_end'] = None
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
                     st.session_state['caller_index'] = 0  # Reset caller to unassigned
