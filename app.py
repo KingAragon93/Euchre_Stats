@@ -130,7 +130,7 @@ def _gtts_render(text: str) -> bytes:
 
 @st.cache_data(show_spinner=False, max_entries=64)
 def _synthesize_speech(text: str) -> bytes:
-    """Render `text` to MP3 bytes with a 4s timeout so a slow upstream can't
+    """Render `text` to MP3 bytes with a 10s timeout so a slow upstream can't
     hang the Streamlit render thread. Cached per-text."""
     with ThreadPoolExecutor(max_workers=1) as ex:
         # 10s accommodates the longer end-of-game recap, which gTTS internally
@@ -138,9 +138,74 @@ def _synthesize_speech(text: str) -> bytes:
         return ex.submit(_gtts_render, text).result(timeout=10.0)
 
 
+def _synthesize_speech_long(text: str, timeout: float = 25.0) -> bytes:
+    """Synthesize longer text (end-of-game recap) with a generous timeout.
+    Not cached — these strings are unique per game so caching adds nothing
+    but memory. Raises on timeout or upstream error."""
+    with ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(_gtts_render, text).result(timeout=timeout)
+
+
+def _render_audio(audio_bytes: bytes) -> None:
+    """Embed pre-synthesized MP3 bytes as an inline autoplay <audio> element.
+    Unique data-herald marker forces Streamlit to re-emit the element so the
+    browser fires autoplay every render."""
+    counter = st.session_state.get('herald_counter', 0) + 1
+    st.session_state['herald_counter'] = counter
+    b64 = base64.b64encode(audio_bytes).decode('ascii')
+    st.markdown(
+        f'<audio autoplay data-herald="{counter}" '
+        f'src="data:audio/mp3;base64,{b64}"></audio>',
+        unsafe_allow_html=True,
+    )
+
+
+def prepare_endgame_audio(game_id: str) -> bool:
+    """Compose the end-of-game recap and synthesize it to MP3 bytes *now*,
+    storing the result in session_state so the next render plays it
+    immediately. Returns True if audio is queued, False on any failure.
+
+    Pre-synthesizing in the handler (rather than after the rerun on the
+    Hall of Victories page) keeps the audio element mount inside the
+    ~5s browser gesture-activation window, so autoplay isn't blocked.
+    """
+    if not st.session_state.get('herald_voice', True):
+        return False
+    try:
+        summary = insights.end_of_game_summary(game_id)
+    except Exception as e:
+        logger.warning("End-of-game summary failed for %s: %s", game_id, e)
+        return False
+    if not summary:
+        logger.info("End-of-game summary returned empty for %s", game_id)
+        return False
+    logger.info("End-of-game recap (%d chars): %s", len(summary), summary)
+    try:
+        audio_bytes = _synthesize_speech_long(summary, timeout=25.0)
+    except FuturesTimeout:
+        logger.warning("End-of-game TTS timed out (text len=%d)", len(summary))
+        return False
+    except Exception as e:
+        logger.warning("End-of-game TTS error: %s", e)
+        return False
+    st.session_state['pending_audio_bytes'] = audio_bytes
+    return True
+
+
 def check_and_speak():
-    """If a score announcement is queued and the herald is enabled, render it
-    to MP3 and play it via an inline autoplay <audio> element."""
+    """If a score announcement is queued and the herald is enabled, play it
+    via an inline autoplay <audio> element. Prefers pre-synthesized bytes
+    (set by prepare_endgame_audio()) over re-synthesizing from text."""
+    # Pre-synthesized audio (end-of-game) takes precedence
+    pre = st.session_state.pop('pending_audio_bytes', None)
+    if pre:
+        if not st.session_state.get('herald_voice', True):
+            st.session_state.pop('speak_text', None)
+            return
+        _render_audio(pre)
+        st.session_state.pop('speak_text', None)  # don't double-announce
+        return
+
     text = st.session_state.pop('speak_text', None)
     if not text or not st.session_state.get('herald_voice', True):
         return
@@ -152,21 +217,7 @@ def check_and_speak():
     except Exception as e:
         logger.warning("Herald TTS error: %s", e)
         return
-
-    # Inline <audio> via st.markdown renders in the main page (inheriting the
-    # document's gesture activation) and, without a `controls` attribute, has
-    # no visual chrome — so no global CSS hide rule is needed. The data-herald
-    # marker makes the markdown content unique per render, so Streamlit
-    # re-emits the element and the browser fires autoplay every time, even
-    # when the MP3 bytes themselves are a cache hit from identical prior text.
-    counter = st.session_state.get('herald_counter', 0) + 1
-    st.session_state['herald_counter'] = counter
-    b64 = base64.b64encode(audio_bytes).decode('ascii')
-    st.markdown(
-        f'<audio autoplay data-herald="{counter}" '
-        f'src="data:audio/mp3;base64,{b64}"></audio>',
-        unsafe_allow_html=True,
-    )
+    _render_audio(audio_bytes)
 
 # Mediterranean × Game of Thrones theme — stone keep meets the Aegean
 st.markdown("""
@@ -668,14 +719,11 @@ def active_games_page():
                         notes=pending['notes'],
                         auto_finish=True  # This will finish the game
                     )
-                    # End of saga: speak the full recap (winner, score, MVP,
-                    # biggest hand, comeback note, etc.) instead of the usual
-                    # score-plus-commentary line. Reset the commentary counter
-                    # too so the next saga starts fresh.
-                    summary = insights.end_of_game_summary(pending['game_id'])
-                    if summary:
-                        st.session_state['speak_text'] = summary
-                    else:
+                    # End of saga: synthesize the full recap NOW (inside the
+                    # gesture-activation window) so the audio plays the moment
+                    # the Hall of Victories page mounts. Falls back to the
+                    # short score announcement if anything goes wrong.
+                    if not prepare_endgame_audio(pending['game_id']):
                         queue_announcement(
                             game['team1_name'], pending.get('new_team1_score', game['team1_score']),
                             game['team2_name'], pending.get('new_team2_score', game['team2_score']),
