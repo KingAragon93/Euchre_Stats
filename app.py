@@ -1229,8 +1229,35 @@ def finished_games_page():
             if not call_df.empty:
                 st.dataframe(call_df, use_container_width=True, hide_index=True)
 
-            if st.button(f"🔥 Burn this Saga", key=f"del_{game['id']}"):
-                confirm_delete_dialog(game['id'])
+            col_rm, col_del = st.columns(2)
+            with col_rm:
+                if st.button(
+                    "⚔️ Rematch",
+                    key=f"rematch_{game['id']}",
+                    type="primary",
+                    use_container_width=True,
+                    help=(
+                        f"Raise the banners again — same houses, same sworn swords, "
+                        f"target {game.get('target_score', 32)} points."
+                    ),
+                ):
+                    new_game_id = db.create_game(
+                        team1_name=game['team1_name'],
+                        team2_name=game['team2_name'],
+                        team1_players=game['team1_players'],
+                        team2_players=game['team2_players'],
+                        target_score=game.get('target_score', 32),
+                    )
+                    st.session_state['active_game_id'] = new_game_id
+                    st.session_state['nav_to'] = "🐉 Active Campaigns"
+                    st.rerun()
+            with col_del:
+                if st.button(
+                    "🔥 Burn this Saga",
+                    key=f"del_{game['id']}",
+                    use_container_width=True,
+                ):
+                    confirm_delete_dialog(game['id'])
 
 
 def statistics_page():
