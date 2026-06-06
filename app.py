@@ -186,67 +186,46 @@ def _synthesize_speech(text: str) -> bytes:
         return ex.submit(_gtts_render, text).result(timeout=timeout)
 
 
-def _render_audio(audio_bytes: bytes, intro_bytes: bytes = b'',
-                  gap_ms: int = 1000) -> None:
-    """Render the herald audio. When an intro sting/fanfare is provided, use
-    a components.html iframe with two <audio> elements + a JS chain so the
-    speech starts `gap_ms` after the intro ends — true sequential playback
-    with a clean 1-second silence between sting and score.
+def _render_audio(audio_bytes: bytes, intro_bytes: bytes = b'') -> None:
+    """Render the herald audio. Both the intro sting/fanfare and the main TTS
+    are rendered as separate <audio autoplay> elements in a single st.markdown
+    call, so the browser starts both when they mount.
 
-    The iframe approach is required because Streamlit's markdown sanitizer
-    strips <script> tags and is unreliable about <audio onended="..."> event
-    handler attributes. Iframe autoplay relies on the parent document's user
-    activation flowing through the default permissions-policy, which works
-    in mainstream browsers when the parent has a recent click.
+    NOTE: PR #20 attempted true sequential playback with a 1-second gap by
+    putting both elements in a components.html iframe and chaining them via
+    JS (intro.onended → setTimeout → main.play()). In production, the iframe
+    autoplay was blocked, so the user got no audio at all — neither speech
+    nor sting. Reverted to dual-st.markdown overlap because it's the proven
+    autoplay path that we know plays in this deployment.
 
-    Failsafe: if the intro's 'ended' event never fires (e.g. the iframe
-    can't autoplay), a setTimeout still calls main.play() after 4.5s so the
-    user gets the speech at minimum.
+    Trade-offs we're accepting until we find a working sequential approach:
+      - sting overlaps with the start of the speech (~1 second of overlap)
+      - no clean 1-second gap between sting end and speech start
 
-    When there's no intro, fall back to the proven single-element st.markdown
-    autoplay path that we know works.
+    Possible follow-up: prepend silence MP3 frames (encoded to match gTTS's
+    exact bitrate/sample-rate) to the TTS bytes so speech effectively starts
+    delayed within a single audio element. Needs careful testing because
+    earlier MP3 concat attempts hit decoder seam issues.
     """
     if not audio_bytes:
         if intro_bytes:
             _render_audio_only(intro_bytes, attr='data-herald-intro')
         return
-    if not intro_bytes:
-        _render_audio_only(audio_bytes, attr='data-herald')
-        return
     counter = st.session_state.get('herald_counter', 0) + 1
     st.session_state['herald_counter'] = counter
-    intro_b64 = base64.b64encode(intro_bytes).decode('ascii')
+    parts = []
+    if intro_bytes:
+        intro_b64 = base64.b64encode(intro_bytes).decode('ascii')
+        parts.append(
+            f'<audio autoplay data-herald-intro="{counter}" '
+            f'src="data:audio/mp3;base64,{intro_b64}"></audio>'
+        )
     main_b64 = base64.b64encode(audio_bytes).decode('ascii')
-    components.html(
-        f"""
-        <audio id="herald_intro_{counter}" autoplay
-               src="data:audio/mp3;base64,{intro_b64}"></audio>
-        <audio id="herald_main_{counter}" preload="auto"
-               src="data:audio/mp3;base64,{main_b64}"></audio>
-        <script>
-        (function() {{
-            var intro = document.getElementById('herald_intro_{counter}');
-            var main  = document.getElementById('herald_main_{counter}');
-            if (!intro || !main) return;
-            var fired = false;
-            var play_main = function() {{
-                if (fired) return;
-                fired = true;
-                main.play().catch(function(e) {{
-                    console.log('herald main play err:', e);
-                }});
-            }};
-            intro.addEventListener('ended', function() {{
-                setTimeout(play_main, {gap_ms});
-            }});
-            // Failsafe: if 'ended' never fires (intro autoplay blocked or
-            // not loaded), still play the speech eventually.
-            setTimeout(play_main, 4500);
-        }})();
-        </script>
-        """,
-        height=0,
+    parts.append(
+        f'<audio autoplay data-herald="{counter}" '
+        f'src="data:audio/mp3;base64,{main_b64}"></audio>'
     )
+    st.markdown(''.join(parts), unsafe_allow_html=True)
 
 
 def _render_audio_only(audio_bytes: bytes, attr: str = 'data-herald') -> None:
