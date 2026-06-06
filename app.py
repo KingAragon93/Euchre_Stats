@@ -51,16 +51,41 @@ def trigger_scroll_to_top():
     st.session_state['scroll_to_top'] = True
 
 
+MUST_CALL_5_THRESHOLD = 27  # house rule: above this, a team must call 5 next
+
+
+def _must_call_5_lines(
+    team1_name: str, team1_score: int,
+    team2_name: str, team2_score: int,
+    target_score: int,
+) -> str:
+    """Build the 'must call 5' reminder sentence(s). Fires for any team whose
+    score is above MUST_CALL_5_THRESHOLD but still under target_score (so the
+    game hasn't already ended)."""
+    lines = []
+    for name, score in ((team1_name, team1_score), (team2_name, team2_score)):
+        if MUST_CALL_5_THRESHOLD < score < target_score:
+            lines.append(f"{name} must call 5.")
+    return " ".join(lines)
+
+
 def queue_announcement(
     team1_name: str,
     team1_score: int,
     team2_name: str,
     team2_score: int,
+    target_score: int = 32,
     extra_fact: Optional[str] = None,
 ):
-    """Stash a score announcement to be spoken on the next rerun. If
-    `extra_fact` is given, it's appended as a second sentence."""
+    """Stash a score announcement to be spoken on the next rerun. Order is
+    score → must-call-5 reminder (if any team is above the threshold but
+    still under target) → optional commentary fact."""
     base = f"{team1_name}, {team1_score}. {team2_name}, {team2_score}."
+    rule = _must_call_5_lines(
+        team1_name, team1_score, team2_name, team2_score, target_score
+    )
+    if rule:
+        base = f"{base} {rule}"
     if extra_fact:
         base = f"{base} {extra_fact}"
     st.session_state['speak_text'] = base
@@ -727,6 +752,7 @@ def active_games_page():
                         queue_announcement(
                             game['team1_name'], pending.get('new_team1_score', game['team1_score']),
                             game['team2_name'], pending.get('new_team2_score', game['team2_score']),
+                            target_score=game.get('target_score', 32),
                         )
                     st.session_state['herald_fact_counter'] = 0
                     st.session_state['pending_game_end'] = None
@@ -909,6 +935,7 @@ def active_games_page():
                     queue_announcement(
                         game['team1_name'], new_team1_score,
                         game['team2_name'], new_team2_score,
+                        target_score=game.get('target_score', 32),
                         extra_fact=maybe_pick_commentary(game_id),
                     )
                     trigger_scroll_to_top()
