@@ -186,15 +186,53 @@ def _synthesize_speech(text: str) -> bytes:
         return ex.submit(_gtts_render, text).result(timeout=timeout)
 
 
-def _render_audio(audio_bytes: bytes) -> None:
-    """Render an inline autoplay <audio> element. Single MP3, proven path."""
+def _render_audio(audio_bytes: bytes, intro_bytes: bytes = b'') -> None:
+    """Render the score TTS as an autoplay <audio> element. If `intro_bytes`
+    is given, also render a *second* autoplay <audio> element with the
+    intro sting/fanfare.
+
+    Both elements get the `autoplay` attribute, so the browser starts both
+    when they mount — they play simultaneously rather than strictly
+    sequentially. True sequential playback would need either an inline
+    <script> (Streamlit's markdown sanitizer strips it) or an `onended`
+    HTML attribute (sanitizer behavior is uncertain — would risk dropping
+    the main TTS if the attribute is stripped). The intro is short
+    (~1 sec sting, ~2 sec fanfare) so the overlap is brief, and the TTS
+    keeps using the proven single-element path we know works.
+    """
+    if not audio_bytes:
+        # If we have no TTS but DO have an intro (e.g. timeout fallback),
+        # at least play the intro so the user gets some audio cue.
+        if intro_bytes:
+            _render_audio_only(intro_bytes, attr='data-herald-intro')
+        return
+    counter = st.session_state.get('herald_counter', 0) + 1
+    st.session_state['herald_counter'] = counter
+    parts = []
+    if intro_bytes:
+        intro_b64 = base64.b64encode(intro_bytes).decode('ascii')
+        parts.append(
+            f'<audio autoplay data-herald-intro="{counter}" '
+            f'src="data:audio/mp3;base64,{intro_b64}"></audio>'
+        )
+    main_b64 = base64.b64encode(audio_bytes).decode('ascii')
+    parts.append(
+        f'<audio autoplay data-herald="{counter}" '
+        f'src="data:audio/mp3;base64,{main_b64}"></audio>'
+    )
+    st.markdown(''.join(parts), unsafe_allow_html=True)
+
+
+def _render_audio_only(audio_bytes: bytes, attr: str = 'data-herald') -> None:
+    """Render a single autoplay <audio> element. Used for intro-only fallback
+    when TTS failed."""
     if not audio_bytes:
         return
     counter = st.session_state.get('herald_counter', 0) + 1
     st.session_state['herald_counter'] = counter
     b64 = base64.b64encode(audio_bytes).decode('ascii')
     st.markdown(
-        f'<audio autoplay data-herald="{counter}" '
+        f'<audio autoplay {attr}="{counter}" '
         f'src="data:audio/mp3;base64,{b64}"></audio>',
         unsafe_allow_html=True,
     )
@@ -202,33 +240,27 @@ def _render_audio(audio_bytes: bytes) -> None:
 
 def check_and_speak():
     """If a score announcement is queued and the herald is enabled, synthesize
-    the text to MP3 and play it.
-
-    NOTE: Sound effects (sting / fanfare) are intentionally disabled in this
-    revision. PR #15 attempted to concatenate intro MP3 + TTS MP3 bytes into
-    a single <audio> element. The concat IS a structurally valid MPEG ADTS
-    stream (file(1) recognizes it), but the browser's HTML5 audio decoder
-    rejects the bit-rate/sample-rate seam between my generated sting (lameenc
-    64 kbps 22.05 kHz) and gTTS output (different format), so no audio plays
-    at all. The sounds/ MP3s stay in the repo for a follow-up that uses two
-    separate audio elements + JS chaining, tested in a real browser.
-    """
+    the text to MP3 and play it alongside the appropriate intro sound."""
     text = st.session_state.pop('speak_text', None)
     is_endgame = bool(st.session_state.pop('herald_endgame', False))
     if not text or not st.session_state.get('herald_voice', True):
         return
     logger.info("Herald speak (endgame=%s, %d chars): %s",
                 is_endgame, len(text), text[:120] + ('…' if len(text) > 120 else ''))
+    intro = _sound_bytes('endgame_fanfare.mp3' if is_endgame else 'score_sting.mp3')
     try:
         audio_bytes = _synthesize_speech(text)
     except FuturesTimeout:
         logger.warning("Herald TTS timed out (text len=%d, timeout=%.1fs)",
                        len(text), _tts_timeout(text))
+        # At least play the intro so the user gets *some* audio cue
+        _render_audio_only(intro, attr='data-herald-intro')
         return
     except Exception as e:
         logger.warning("Herald TTS error: %s", e)
+        _render_audio_only(intro, attr='data-herald-intro')
         return
-    _render_audio(audio_bytes)
+    _render_audio(audio_bytes, intro_bytes=intro)
 
 # Mediterranean × Game of Thrones theme — stone keep meets the Aegean
 st.markdown("""
