@@ -8,6 +8,7 @@ import pandas as pd
 import base64
 import io
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from datetime import datetime
 from typing import Optional
@@ -110,14 +111,10 @@ def _commentary_interval() -> Optional[int]:
 
 
 def maybe_pick_commentary(game_id: str) -> Optional[str]:
-    """Per-saga counter: when it trips, ask insights for a fact. Reset the
-    counter only if a fact is actually returned, so an empty stretch of
-    history doesn't permanently silence the commentary.
-
-    The picker now falls back to an always-fires recap when no notable fact
-    applies, so under normal use this will return text every time the counter
-    trips. `fact_call_recap` is intentionally excluded from the recent-facts
-    rotation guard so it can fire back-to-back during fact droughts.
+    """Per-saga counter: when it trips, ask insights for a fact, suppressing
+    any fact generator that has already fired this saga so the same global
+    stat (e.g. partnership win-rate) doesn't repeat within one game.
+    fact_call_recap is exempt — it's the always-fires fallback.
     """
     interval = _commentary_interval()
     if interval is None:
@@ -126,22 +123,43 @@ def maybe_pick_commentary(game_id: str) -> Optional[str]:
     if counter < interval:
         st.session_state['herald_fact_counter'] = counter
         return None
-    recent = st.session_state.get('herald_recent_facts', [])
-    picked = insights.pick_fact_for_hand(game_id, set(recent[-3:]))
+    # Per-saga rotation — every fact-generator name fires at most once per game
+    game_facts_key = f'game_facts_spoken_{game_id}'
+    spoken_this_game = set(st.session_state.get(game_facts_key, []))
+    picked = insights.pick_fact_for_hand(game_id, spoken_this_game)
     logger.info(
-        "Herald commentary: counter=%d/%d picked=%s",
+        "Herald commentary: counter=%d/%d picked=%s (suppressed=%d this saga)",
         counter, interval,
         picked[0] if picked else "NONE",
+        len(spoken_this_game),
     )
     if not picked:
         st.session_state['herald_fact_counter'] = counter
         return None
     key, text = picked
     if key != "fact_call_recap":
-        recent.append(key)
-        st.session_state['herald_recent_facts'] = recent[-10:]
+        spoken_this_game.add(key)
+        st.session_state[game_facts_key] = list(spoken_this_game)
     st.session_state['herald_fact_counter'] = 0
     return text
+
+
+SOUNDS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'sounds')
+
+
+@st.cache_resource(show_spinner=False)
+def _sound_bytes(filename: str) -> bytes:
+    """Load a sound file from sounds/, cached for the session. Empty bytes on
+    miss so callers can fall through silently."""
+    path = os.path.join(SOUNDS_DIR, filename)
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+        logger.info("Loaded sound %s (%d bytes)", filename, len(data))
+        return data
+    except FileNotFoundError:
+        logger.warning("Sound file not found: %s", path)
+        return b''
 
 
 def _gtts_render(text: str) -> bytes:
@@ -153,31 +171,31 @@ def _gtts_render(text: str) -> bytes:
     return buf.getvalue()
 
 
+def _tts_timeout(text: str) -> float:
+    """gTTS splits long text into multiple ~100-char HTTP requests.
+    Scale the timeout to text length so long recaps don't trip the 10s
+    cap that's fine for hand announcements."""
+    return max(10.0, len(text) * 0.06 + 5.0)
+
+
 @st.cache_data(show_spinner=False, max_entries=64)
 def _synthesize_speech(text: str) -> bytes:
-    """Render `text` to MP3 bytes with a 10s timeout so a slow upstream can't
-    hang the Streamlit render thread. Cached per-text."""
-    with ThreadPoolExecutor(max_workers=1) as ex:
-        # 10s accommodates the longer end-of-game recap, which gTTS internally
-        # splits into multiple short requests when the text crosses ~100 chars.
-        return ex.submit(_gtts_render, text).result(timeout=10.0)
-
-
-def _synthesize_speech_long(text: str, timeout: float = 25.0) -> bytes:
-    """Synthesize longer text (end-of-game recap) with a generous timeout.
-    Not cached — these strings are unique per game so caching adds nothing
-    but memory. Raises on timeout or upstream error."""
+    """Render `text` to MP3 bytes. Cached per-text. Timeout scales with length."""
+    timeout = _tts_timeout(text)
     with ThreadPoolExecutor(max_workers=1) as ex:
         return ex.submit(_gtts_render, text).result(timeout=timeout)
 
 
-def _render_audio(audio_bytes: bytes) -> None:
-    """Embed pre-synthesized MP3 bytes as an inline autoplay <audio> element.
-    Unique data-herald marker forces Streamlit to re-emit the element so the
-    browser fires autoplay every render."""
+def _render_audio(audio_bytes: bytes, intro_bytes: bytes = b'') -> None:
+    """Render an inline autoplay <audio> element. If `intro_bytes` is given,
+    it's concatenated in front of the main audio — MP3 is a frame-based
+    stream so simple byte concatenation produces a single playable file."""
     counter = st.session_state.get('herald_counter', 0) + 1
     st.session_state['herald_counter'] = counter
-    b64 = base64.b64encode(audio_bytes).decode('ascii')
+    payload = (intro_bytes or b'') + (audio_bytes or b'')
+    if not payload:
+        return
+    b64 = base64.b64encode(payload).decode('ascii')
     st.markdown(
         f'<audio autoplay data-herald="{counter}" '
         f'src="data:audio/mp3;base64,{b64}"></audio>',
@@ -185,64 +203,33 @@ def _render_audio(audio_bytes: bytes) -> None:
     )
 
 
-def prepare_endgame_audio(game_id: str) -> bool:
-    """Compose the end-of-game recap and synthesize it to MP3 bytes *now*,
-    storing the result in session_state so the next render plays it
-    immediately. Returns True if audio is queued, False on any failure.
-
-    Pre-synthesizing in the handler (rather than after the rerun on the
-    Hall of Victories page) keeps the audio element mount inside the
-    ~5s browser gesture-activation window, so autoplay isn't blocked.
-    """
-    if not st.session_state.get('herald_voice', True):
-        return False
-    try:
-        summary = insights.end_of_game_summary(game_id)
-    except Exception as e:
-        logger.warning("End-of-game summary failed for %s: %s", game_id, e)
-        return False
-    if not summary:
-        logger.info("End-of-game summary returned empty for %s", game_id)
-        return False
-    logger.info("End-of-game recap (%d chars): %s", len(summary), summary)
-    try:
-        audio_bytes = _synthesize_speech_long(summary, timeout=25.0)
-    except FuturesTimeout:
-        logger.warning("End-of-game TTS timed out (text len=%d)", len(summary))
-        return False
-    except Exception as e:
-        logger.warning("End-of-game TTS error: %s", e)
-        return False
-    st.session_state['pending_audio_bytes'] = audio_bytes
-    return True
-
-
 def check_and_speak():
-    """If a score announcement is queued and the herald is enabled, play it
-    via an inline autoplay <audio> element. Prefers pre-synthesized bytes
-    (set by prepare_endgame_audio()) over re-synthesizing from text."""
-    # Pre-synthesized audio (end-of-game) takes precedence
-    pre = st.session_state.pop('pending_audio_bytes', None)
-    if pre:
-        if not st.session_state.get('herald_voice', True):
-            st.session_state.pop('speak_text', None)
-            return
-        _render_audio(pre)
-        st.session_state.pop('speak_text', None)  # don't double-announce
-        return
-
+    """If a score announcement is queued and the herald is enabled, synthesize
+    the text to MP3 and play it. End-of-game announcements get a celebratory
+    fanfare intro; regular hand announcements get the 'bum bum bum bummmm'
+    score sting. Intro and TTS are concatenated into one playable MP3."""
     text = st.session_state.pop('speak_text', None)
+    is_endgame = bool(st.session_state.pop('herald_endgame', False))
     if not text or not st.session_state.get('herald_voice', True):
         return
+    logger.info("Herald speak (endgame=%s, %d chars): %s",
+                is_endgame, len(text), text[:120] + ('…' if len(text) > 120 else ''))
+    intro = _sound_bytes('endgame_fanfare.mp3' if is_endgame else 'score_sting.mp3')
     try:
         audio_bytes = _synthesize_speech(text)
     except FuturesTimeout:
-        logger.warning("Herald TTS timed out (text=%r)", text)
+        logger.warning("Herald TTS timed out (text len=%d, timeout=%.1fs)",
+                       len(text), _tts_timeout(text))
+        # Still play the sting/fanfare so the user gets *some* audio cue
+        if intro:
+            _render_audio(b'', intro_bytes=intro)
         return
     except Exception as e:
         logger.warning("Herald TTS error: %s", e)
+        if intro:
+            _render_audio(b'', intro_bytes=intro)
         return
-    _render_audio(audio_bytes)
+    _render_audio(audio_bytes, intro_bytes=intro)
 
 # Mediterranean × Game of Thrones theme — stone keep meets the Aegean
 st.markdown("""
@@ -744,16 +731,28 @@ def active_games_page():
                         notes=pending['notes'],
                         auto_finish=True  # This will finish the game
                     )
-                    # End of saga: synthesize the full recap NOW (inside the
-                    # gesture-activation window) so the audio plays the moment
-                    # the Hall of Victories page mounts. Falls back to the
-                    # short score announcement if anything goes wrong.
-                    if not prepare_endgame_audio(pending['game_id']):
+                    # End of saga: queue the recap as plain speak_text so it
+                    # rides the same proven path as hand announcements.
+                    # check_and_speak handles synth + fanfare intro on the next
+                    # render. Falls back to the short score line if the recap
+                    # can't be composed (no hands, missing winner, etc.).
+                    try:
+                        summary = insights.end_of_game_summary(pending['game_id'])
+                    except Exception as e:
+                        logger.warning("End-of-game summary errored: %s", e)
+                        summary = None
+                    if summary:
+                        logger.info("End-of-game recap queued (%d chars): %s", len(summary), summary)
+                        st.session_state['speak_text'] = summary
+                        st.session_state['herald_endgame'] = True
+                    else:
+                        logger.info("End-of-game summary empty; falling back to short announcement")
                         queue_announcement(
                             game['team1_name'], pending.get('new_team1_score', game['team1_score']),
                             game['team2_name'], pending.get('new_team2_score', game['team2_score']),
                             target_score=game.get('target_score', 32),
                         )
+                        st.session_state['herald_endgame'] = True  # still play fanfare
                     st.session_state['herald_fact_counter'] = 0
                     st.session_state['pending_game_end'] = None
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
