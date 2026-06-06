@@ -186,16 +186,13 @@ def _synthesize_speech(text: str) -> bytes:
         return ex.submit(_gtts_render, text).result(timeout=timeout)
 
 
-def _render_audio(audio_bytes: bytes, intro_bytes: bytes = b'') -> None:
-    """Render an inline autoplay <audio> element. If `intro_bytes` is given,
-    it's concatenated in front of the main audio — MP3 is a frame-based
-    stream so simple byte concatenation produces a single playable file."""
+def _render_audio(audio_bytes: bytes) -> None:
+    """Render an inline autoplay <audio> element. Single MP3, proven path."""
+    if not audio_bytes:
+        return
     counter = st.session_state.get('herald_counter', 0) + 1
     st.session_state['herald_counter'] = counter
-    payload = (intro_bytes or b'') + (audio_bytes or b'')
-    if not payload:
-        return
-    b64 = base64.b64encode(payload).decode('ascii')
+    b64 = base64.b64encode(audio_bytes).decode('ascii')
     st.markdown(
         f'<audio autoplay data-herald="{counter}" '
         f'src="data:audio/mp3;base64,{b64}"></audio>',
@@ -205,31 +202,33 @@ def _render_audio(audio_bytes: bytes, intro_bytes: bytes = b'') -> None:
 
 def check_and_speak():
     """If a score announcement is queued and the herald is enabled, synthesize
-    the text to MP3 and play it. End-of-game announcements get a celebratory
-    fanfare intro; regular hand announcements get the 'bum bum bum bummmm'
-    score sting. Intro and TTS are concatenated into one playable MP3."""
+    the text to MP3 and play it.
+
+    NOTE: Sound effects (sting / fanfare) are intentionally disabled in this
+    revision. PR #15 attempted to concatenate intro MP3 + TTS MP3 bytes into
+    a single <audio> element. The concat IS a structurally valid MPEG ADTS
+    stream (file(1) recognizes it), but the browser's HTML5 audio decoder
+    rejects the bit-rate/sample-rate seam between my generated sting (lameenc
+    64 kbps 22.05 kHz) and gTTS output (different format), so no audio plays
+    at all. The sounds/ MP3s stay in the repo for a follow-up that uses two
+    separate audio elements + JS chaining, tested in a real browser.
+    """
     text = st.session_state.pop('speak_text', None)
     is_endgame = bool(st.session_state.pop('herald_endgame', False))
     if not text or not st.session_state.get('herald_voice', True):
         return
     logger.info("Herald speak (endgame=%s, %d chars): %s",
                 is_endgame, len(text), text[:120] + ('…' if len(text) > 120 else ''))
-    intro = _sound_bytes('endgame_fanfare.mp3' if is_endgame else 'score_sting.mp3')
     try:
         audio_bytes = _synthesize_speech(text)
     except FuturesTimeout:
         logger.warning("Herald TTS timed out (text len=%d, timeout=%.1fs)",
                        len(text), _tts_timeout(text))
-        # Still play the sting/fanfare so the user gets *some* audio cue
-        if intro:
-            _render_audio(b'', intro_bytes=intro)
         return
     except Exception as e:
         logger.warning("Herald TTS error: %s", e)
-        if intro:
-            _render_audio(b'', intro_bytes=intro)
         return
-    _render_audio(audio_bytes, intro_bytes=intro)
+    _render_audio(audio_bytes)
 
 # Mediterranean × Game of Thrones theme — stone keep meets the Aegean
 st.markdown("""
