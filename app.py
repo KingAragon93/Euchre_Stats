@@ -648,11 +648,198 @@ def new_game_page():
                 st.rerun()
 
 
+def compute_rivalry_stats(team1_name, team1_players, team2_name, team2_players):
+    """Find all finished sagas where these two player rosters faced off
+    (regardless of which side they sat on or whether team names changed)
+    and tally the head-to-head record. Returns None if this is their first
+    encounter."""
+    try:
+        games = db.get_finished_games() or []
+    except Exception as e:
+        logger.warning("Rivalry lookup failed: %s", e)
+        return None
+
+    roster_a = frozenset(team1_players or [])
+    roster_b = frozenset(team2_players or [])
+    if not roster_a or not roster_b:
+        return None
+    matchup = {roster_a, roster_b}
+
+    rivalry_games = []
+    for g in games:
+        a = frozenset(g.get('team1_players') or [])
+        b = frozenset(g.get('team2_players') or [])
+        if {a, b} == matchup:
+            rivalry_games.append(g)
+    if len(rivalry_games) < 2:
+        return None  # need at least 2 sagas to be a rivalry
+
+    team1_wins = team2_wins = 0
+    team1_points = team2_points = 0
+    for g in rivalry_games:
+        # Identify which side carried the team1 roster in this game
+        g_a = frozenset(g.get('team1_players') or [])
+        if g_a == roster_a:
+            t1_score = int(g.get('team1_score') or 0)
+            t2_score = int(g.get('team2_score') or 0)
+            t1_name = g.get('team1_name')
+            t2_name = g.get('team2_name')
+        else:
+            t1_score = int(g.get('team2_score') or 0)
+            t2_score = int(g.get('team1_score') or 0)
+            t1_name = g.get('team2_name')
+            t2_name = g.get('team1_name')
+        team1_points += t1_score
+        team2_points += t2_score
+        winner = g.get('winner')
+        if winner == t1_name:
+            team1_wins += 1
+        elif winner == t2_name:
+            team2_wins += 1
+
+    return {
+        'total': len(rivalry_games),
+        'team1_wins': team1_wins,
+        'team2_wins': team2_wins,
+        'team1_avg': round(team1_points / len(rivalry_games), 1),
+        'team2_avg': round(team2_points / len(rivalry_games), 1),
+    }
+
+
+def show_endgame_celebration(game_id: str):
+    """Dedicated post-Crown view. Stays on Active Campaigns route so we don't
+    navigate into the heavy Hall of Victories render (which was making the
+    recap audio mount too late to play). Renders just this saga's data plus
+    rivalry stats if there's a history, and gives the user explicit buttons
+    to leave."""
+    game = db.get_game(game_id)
+    if not game:
+        st.session_state.pop('recently_finished_game', None)
+        return
+
+    st.markdown("""
+    <div class="page-header">
+        <h2>👑 Victory!</h2>
+        <p>The saga is ended. The chronicle is sealed.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Winner banner
+    st.markdown(f"""
+    <div class="winner-banner">
+        👑 {game['winner']} Reigns Supreme 👑
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Final score, with the winning house highlighted via the accent border
+    col1, col2 = st.columns(2)
+    with col1:
+        cls = 'team-accent' if game.get('winner') == game['team1_name'] else 'team-secondary'
+        st.markdown(f"""
+        <div class="team-score {cls}">
+            <h3 style="margin: 0; font-weight: 600;">{game['team1_name']}</h3>
+            <p class="score-display" style="margin: 0;">{game['team1_score']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    with col2:
+        cls = 'team-accent' if game.get('winner') == game['team2_name'] else 'team-secondary'
+        st.markdown(f"""
+        <div class="team-score {cls}">
+            <h3 style="margin: 0; font-weight: 600;">{game['team2_name']}</h3>
+            <p class="score-display" style="margin: 0;">{game['team2_score']}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.divider()
+
+    # Saga summary metrics
+    hands = db.get_hands(game_id) or []
+    if hands:
+        st.subheader("📜 Saga Summary")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Hands", len(hands))
+        with c2:
+            euchres = sum(1 for h in hands if h.get('is_euchre'))
+            st.metric("Euchres", euchres)
+        with c3:
+            mvp = insights._top_scorer_of_game(hands)
+            if mvp:
+                name, net, _ = mvp
+                st.metric("MVP", name, delta=f"{net} net pts" if net else None)
+        with c4:
+            big = insights._biggest_successful_hand(hands)
+            if big:
+                name, pts, call = big
+                st.metric("Mightiest Hand", f"{pts} pts", delta=f"{name} • call of {call}")
+
+    # Head-to-head rivalry record
+    rivalry = compute_rivalry_stats(
+        game['team1_name'], game.get('team1_players') or [],
+        game['team2_name'], game.get('team2_players') or [],
+    )
+    if rivalry:
+        st.divider()
+        st.subheader("⚔️ Rivalry Record")
+        st.caption(
+            f"These two houses have now met {rivalry['total']} times upon the green table."
+        )
+        c1, c2 = st.columns(2)
+        with c1:
+            st.metric(
+                f"{game['team1_name']} wins",
+                rivalry['team1_wins'],
+                delta=f"avg {rivalry['team1_avg']} pts/saga",
+            )
+        with c2:
+            st.metric(
+                f"{game['team2_name']} wins",
+                rivalry['team2_wins'],
+                delta=f"avg {rivalry['team2_avg']} pts/saga",
+            )
+
+    st.divider()
+
+    # Action row — explicit user choice instead of auto-navigation
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("⚔️ Rematch", use_container_width=True, type="primary",
+                     key="endgame_rematch"):
+            new_id = db.create_game(
+                team1_name=game['team1_name'],
+                team2_name=game['team2_name'],
+                team1_players=game['team1_players'],
+                team2_players=game['team2_players'],
+                target_score=game.get('target_score', 32),
+            )
+            st.session_state['active_game_id'] = new_id
+            st.session_state.pop('recently_finished_game', None)
+            st.rerun()
+    with c2:
+        if st.button("📜 Hall of Victories", use_container_width=True,
+                     key="endgame_to_hall"):
+            st.session_state.pop('recently_finished_game', None)
+            st.session_state['nav_to'] = "📜 Hall of Victories"
+            st.rerun()
+    with c3:
+        if st.button("✓ Done", use_container_width=True, key="endgame_done"):
+            st.session_state.pop('recently_finished_game', None)
+            st.rerun()
+
+
 def active_games_page():
     """View and manage active games."""
+    # If a saga just ended via Crown the Victor, take over the page with the
+    # celebration view instead of the normal active-games picker. This keeps
+    # the rerun cheap so the recap audio mounts inside the gesture window.
+    rfg = st.session_state.get('recently_finished_game')
+    if rfg:
+        show_endgame_celebration(rfg)
+        return
+
     # Check if we need to scroll to top (after logging a hand)
     check_scroll_to_top()
-    
+
     # Show success message if set
     if 'show_success' in st.session_state:
         st.success(st.session_state['show_success'])
@@ -762,11 +949,13 @@ def active_games_page():
                         notes=pending['notes'],
                         auto_finish=True  # This will finish the game
                     )
-                    # End of saga: queue the recap as plain speak_text so it
-                    # rides the same proven path as hand announcements.
-                    # check_and_speak handles synth + fanfare intro on the next
-                    # render. Falls back to the short score line if the recap
-                    # can't be composed (no hands, missing winner, etc.).
+                    # End of saga: queue the recap and flag the dedicated
+                    # celebration view. We deliberately do NOT navigate to
+                    # Hall of Victories — the heavy multi-game render there
+                    # delays audio mount past the user-activation window.
+                    # The celebration view stays on this page and renders
+                    # just the one game's data, so audio mounts fast and the
+                    # user can read the stats without losing the moment.
                     try:
                         summary = insights.end_of_game_summary(pending['game_id'])
                     except Exception as e:
@@ -775,7 +964,6 @@ def active_games_page():
                     if summary:
                         logger.info("End-of-game recap queued (%d chars): %s", len(summary), summary)
                         st.session_state['speak_text'] = summary
-                        st.session_state['herald_endgame'] = True
                     else:
                         logger.info("End-of-game summary empty; falling back to short announcement")
                         queue_announcement(
@@ -783,14 +971,13 @@ def active_games_page():
                             game['team2_name'], pending.get('new_team2_score', game['team2_score']),
                             target_score=game.get('target_score', 32),
                         )
-                        st.session_state['herald_endgame'] = True  # still play fanfare
+                    st.session_state['herald_endgame'] = True
+                    st.session_state['recently_finished_game'] = pending['game_id']
                     st.session_state['herald_fact_counter'] = 0
                     st.session_state['pending_game_end'] = None
                     st.session_state['form_key'] = st.session_state.get('form_key', 0) + 1
                     st.session_state['caller_index'] = 0  # Reset caller to unassigned
                     st.balloons()
-                    st.success(f"👑 The saga is ended. {pending['winner']} reigns supreme!")
-                    st.session_state['nav_to'] = "📜 Hall of Victories"
                     st.rerun()
 
             with col2:
