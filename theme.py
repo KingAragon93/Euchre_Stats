@@ -648,12 +648,30 @@ DEFAULT_THEME = 'game_of_thrones'
 def _read_theme_from_url() -> Optional[str]:
     """Read a `?theme=` value from the URL query params (if present and valid).
     Used to seed session_state on a fresh page load so the user's last
-    theme choice survives browser refreshes."""
+    theme choice survives browser refreshes.
+
+    Falls back to the legacy st.experimental_get_query_params() if the
+    modern st.query_params attribute doesn't exist (some older Streamlit
+    pins on Streamlit Cloud don't have it). Returns None on any failure."""
+    # Try modern API first
     try:
         params = st.query_params
-        key = params.get('theme')
-        if key in THEMES:
+        key = params.get('theme') if params is not None else None
+        if isinstance(key, str) and key in THEMES:
             return key
+    except (AttributeError, Exception):
+        pass
+    # Fall back to legacy experimental API
+    try:
+        get_legacy = getattr(st, 'experimental_get_query_params', None)
+        if get_legacy is not None:
+            params = get_legacy() or {}
+            val = params.get('theme')
+            # legacy API returns list of strings
+            if isinstance(val, list) and val:
+                val = val[0]
+            if isinstance(val, str) and val in THEMES:
+                return val
     except Exception:
         pass
     return None
@@ -662,19 +680,34 @@ def _read_theme_from_url() -> Optional[str]:
 def init_theme_from_url() -> None:
     """Call once near the top of the app (before the sidebar's theme picker)
     to make sure session_state['theme'] reflects the URL query param.
-    Safe to call repeatedly — only writes when needed."""
-    if 'theme' in st.session_state:
-        return
-    from_url = _read_theme_from_url()
-    if from_url is not None:
-        st.session_state['theme'] = from_url
+    Safe to call repeatedly — only writes when needed. Wrapped so any error
+    inside (e.g. very early Streamlit lifecycle quirks) can't crash startup."""
+    try:
+        if 'theme' in st.session_state:
+            return
+        from_url = _read_theme_from_url()
+        if from_url is not None:
+            st.session_state['theme'] = from_url
+    except Exception:
+        # Theme persistence is best-effort. Never let it crash the app.
+        pass
 
 
 def persist_theme_to_url(key: str) -> None:
     """Write the user's theme choice into the URL query params so a refresh
-    keeps it. Streamlit will reflect this in the browser address bar."""
+    keeps it. Streamlit will reflect this in the browser address bar.
+    Falls back to the legacy experimental_set_query_params on older builds."""
+    # Try modern API first
     try:
         st.query_params['theme'] = key
+        return
+    except (AttributeError, Exception):
+        pass
+    # Fall back to legacy experimental API
+    try:
+        set_legacy = getattr(st, 'experimental_set_query_params', None)
+        if set_legacy is not None:
+            set_legacy(theme=key)
     except Exception:
         pass
 

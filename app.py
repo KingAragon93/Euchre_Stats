@@ -28,7 +28,13 @@ logger = logging.getLogger(__name__)
 # session, so seed session_state['theme'] from the ?theme= URL query
 # param BEFORE we read it for the page title — that way refreshes preserve
 # the user's theme choice instead of always reverting to the default.
-theme.init_theme_from_url()
+# Defensive try/except: if init crashes for ANY reason (Streamlit version
+# mismatch, lifecycle quirks, etc.) we fall through to the default theme
+# rather than crashing the entire app at startup.
+try:
+    theme.init_theme_from_url()
+except Exception as _e:
+    logger.warning("theme.init_theme_from_url() failed: %s", _e)
 st.set_page_config(
     page_title=t('page_title'),
     page_icon=t('page_icon'),
