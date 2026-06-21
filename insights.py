@@ -523,25 +523,32 @@ def end_of_game_summary(game_id: str) -> Optional[str]:
         winner_score, loser_score = t2_score, t1_score
         loser_name = game['team1_name']
 
+    # Pull every phrase template through the active theme so the Standard
+    # theme says "Winner! X beat Y" instead of "Victory! X triumphs over Y",
+    # "game" instead of "saga", "biggest hand" instead of "mightiest hand",
+    # etc. theme.t() falls back to the default (Game of Thrones) phrasing
+    # for any key that's missing from a theme, so existing sessions keep
+    # working unchanged.
+    from theme import t
+
     parts: List[str] = []
 
     # Required: winner + final score
-    parts.append(
-        f"Victory! {winner} triumphs over {loser_name}, "
-        f"{winner_score} to {loser_score}."
-    )
+    parts.append(t('recap_winner',
+                   winner=winner, loser=loser_name,
+                   ws=winner_score, ls=loser_score))
 
     # Saga length
-    parts.append(f"The saga ran {len(hands)} hands.")
+    parts.append(t('recap_length', n=len(hands)))
 
     # MVP — top net scorer
     mvp = _top_scorer_of_game(hands)
     if mvp:
         name, net, count = mvp
         if net > 0:
-            parts.append(f"{name} led all callers with {net} net points across {count} calls.")
+            parts.append(t('recap_mvp_net', name=name, net=net, count=count))
         elif net == 0:
-            parts.append(f"{name} called {count} times for a net of zero.")
+            parts.append(t('recap_mvp_zero', name=name, count=count))
 
     # Mightiest single hand
     big = _biggest_successful_hand(hands)
@@ -560,24 +567,18 @@ def end_of_game_summary(game_id: str) -> Optional[str]:
                 and int(latest.get('points_scored', 0)) == pts
             )
             if is_final:
-                parts.append(
-                    f"The mightiest hand was {name}'s call of {call}, "
-                    f"worth {pts} points."
-                )
+                parts.append(t('recap_mighty_final', name=name, call=call, pts=pts))
             else:
-                parts.append(
-                    f"Earlier in the saga, {name}'s call of {call} brought "
-                    f"the mightiest hand at {pts} points."
-                )
+                parts.append(t('recap_mighty_earlier', name=name, call=call, pts=pts))
 
     # Euchre count, only if notable
     euchres = sum(1 for h in hands if h['is_euchre'])
     if euchres >= 2:
-        parts.append(f"{euchres} hands ended in euchres.")
+        parts.append(t('recap_euchres', n=euchres))
 
     # Comeback note
     deficit = _largest_winner_deficit(hands, winner_key)
     if deficit >= 5:
-        parts.append(f"At one point, {winner} trailed by {deficit} before fighting back.")
+        parts.append(t('recap_comeback', winner=winner, deficit=deficit))
 
     return " ".join(parts)

@@ -194,6 +194,16 @@ GAME_OF_THRONES = {
     'stats_partnerships_empty': 'Wage more campaigns to see which partnerships endure, my lord.',
     'stats_houses_header': '🛡️ The Great Houses',
 
+    # === End-of-game spoken recap — phrase templates used by insights.end_of_game_summary ===
+    'recap_winner': 'Victory! {winner} triumphs over {loser}, {ws} to {ls}.',
+    'recap_length': 'The saga ran {n} hands.',
+    'recap_mvp_net': '{name} led all callers with {net} net points across {count} calls.',
+    'recap_mvp_zero': '{name} called {count} times for a net of zero.',
+    'recap_mighty_final': "The mightiest hand was {name}'s call of {call}, worth {pts} points.",
+    'recap_mighty_earlier': "Earlier in the saga, {name}'s call of {call} brought the mightiest hand at {pts} points.",
+    'recap_euchres': '{n} hands ended in euchres.',
+    'recap_comeback': 'At one point, {winner} trailed by {deficit} before fighting back.',
+
     # === CSS — the medieval banner style ===
     'css': """
 <style>
@@ -555,6 +565,16 @@ STANDARD = {
     'stats_partnerships_caption': 'Which player pairs perform best together?',
     'stats_partnerships_empty': 'Play more games to see partnership stats.',
     'stats_houses_header': '👥 Team Stats',
+
+    # === End-of-game spoken recap ===
+    'recap_winner': 'Winner! {winner} beat {loser}, {ws} to {ls}.',
+    'recap_length': 'The game ran {n} hands.',
+    'recap_mvp_net': '{name} was top scorer with {net} net points across {count} calls.',
+    'recap_mvp_zero': '{name} called {count} times for a net of zero.',
+    'recap_mighty_final': "The biggest hand was {name}'s call of {call}, worth {pts} points.",
+    'recap_mighty_earlier': "Earlier in the game, {name}'s call of {call} was the biggest hand at {pts} points.",
+    'recap_euchres': '{n} hands ended in euchres.',
+    'recap_comeback': 'At one point, {winner} trailed by {deficit} before fighting back.',
 
     # === CSS — modern clean card style (no overrides — lets config.toml shine) ===
     'css': """
