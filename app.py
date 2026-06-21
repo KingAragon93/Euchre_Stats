@@ -385,9 +385,20 @@ _picked_key = _theme_display_to_key[_picked_display]
 if _picked_key != theme.current_theme_key():
     st.session_state['theme'] = _picked_key
     # Persist to the URL query param so browser refreshes keep the
-    # selection rather than reverting to DEFAULT_THEME.
-    theme.persist_theme_to_url(_picked_key)
-    st.rerun()
+    # selection rather than reverting to DEFAULT_THEME. Defensively wrapped
+    # at the call site — older Streamlit pins may not have st.query_params,
+    # and the inner try/except in theme.persist_theme_to_url assumed the
+    # function itself exists, which isn't guaranteed if deployment lag
+    # serves an older theme.py.
+    try:
+        theme.persist_theme_to_url(_picked_key)
+    except Exception as _e:
+        logger.warning("theme.persist_theme_to_url failed: %s", _e)
+    # st.rerun() with fallback to legacy st.experimental_rerun on
+    # very-old pins where only the experimental name exists.
+    _rerun = getattr(st, 'rerun', None) or getattr(st, 'experimental_rerun', None)
+    if _rerun is not None:
+        _rerun()
 
 # Welcome sound — fires once per browser session (page refresh → new session
 # → plays again). Must run AFTER the sidebar so it sees the herald_voice
