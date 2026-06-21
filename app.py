@@ -271,6 +271,37 @@ def check_and_speak():
         return
     _render_audio(audio_bytes, intro_bytes=intro)
 
+
+def play_page_load_sound() -> None:
+    """Play sounds/page_load.m4a once per browser session.
+
+    Streamlit reruns the script on every interaction but keeps session_state
+    intact; a fresh tab or browser refresh starts a new session, so we use
+    a session_state flag to ensure the sound plays exactly once per page
+    load. Respects the herald_voice toggle — if the user has muted the
+    voice we skip the welcome sound too.
+
+    Caveat: browser autoplay policy may block this on a cold page load
+    (no recent user gesture). Once the user has clicked anything on the
+    domain in the past, modern browsers usually grant autoplay permission
+    via the media-engagement index, so it'll play on subsequent visits
+    even before the user interacts with the page.
+    """
+    if st.session_state.get('page_load_played'):
+        return
+    st.session_state['page_load_played'] = True
+    if not st.session_state.get('herald_voice', True):
+        return
+    audio_bytes = _sound_bytes('page_load.m4a')
+    if not audio_bytes:
+        return
+    b64 = base64.b64encode(audio_bytes).decode('ascii')
+    st.markdown(
+        f'<audio autoplay data-page-load="1" '
+        f'src="data:audio/mp4;base64,{b64}"></audio>',
+        unsafe_allow_html=True,
+    )
+
 # Theme-driven CSS. The active theme dict provides the full <style> block;
 # swapping themes from the sidebar re-renders with a different palette.
 st.markdown(t('css'), unsafe_allow_html=True)
@@ -340,6 +371,13 @@ _picked_key = _theme_display_to_key[_picked_display]
 if _picked_key != theme.current_theme_key():
     st.session_state['theme'] = _picked_key
     st.rerun()
+
+# Welcome sound — fires once per browser session (page refresh → new session
+# → plays again). Must run AFTER the sidebar so it sees the herald_voice
+# toggle's session_state value, and BEFORE page routing so the audio element
+# mounts at the top of the page where it's least likely to compete with other
+# autoplay audio later in the render.
+play_page_load_sound()
 
 
 def format_game_time(iso_time: str) -> str:
