@@ -17,6 +17,8 @@ read from the active theme.
 """
 from __future__ import annotations
 
+from typing import Optional
+
 import streamlit as st
 
 
@@ -641,6 +643,40 @@ THEMES = {
 }
 
 DEFAULT_THEME = 'game_of_thrones'
+
+
+def _read_theme_from_url() -> Optional[str]:
+    """Read a `?theme=` value from the URL query params (if present and valid).
+    Used to seed session_state on a fresh page load so the user's last
+    theme choice survives browser refreshes."""
+    try:
+        params = st.query_params
+        key = params.get('theme')
+        if key in THEMES:
+            return key
+    except Exception:
+        pass
+    return None
+
+
+def init_theme_from_url() -> None:
+    """Call once near the top of the app (before the sidebar's theme picker)
+    to make sure session_state['theme'] reflects the URL query param.
+    Safe to call repeatedly — only writes when needed."""
+    if 'theme' in st.session_state:
+        return
+    from_url = _read_theme_from_url()
+    if from_url is not None:
+        st.session_state['theme'] = from_url
+
+
+def persist_theme_to_url(key: str) -> None:
+    """Write the user's theme choice into the URL query params so a refresh
+    keeps it. Streamlit will reflect this in the browser address bar."""
+    try:
+        st.query_params['theme'] = key
+    except Exception:
+        pass
 
 
 def current_theme_key() -> str:
