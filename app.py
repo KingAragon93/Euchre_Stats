@@ -24,8 +24,11 @@ logger = logging.getLogger(__name__)
 # Page config must be the first Streamlit command — keep it ahead of the
 # @st.cache_data decorator below so newer Streamlit versions that treat
 # decorator registration as a "Streamlit command" don't reject startup.
-# Title/icon read from the active theme; session_state hasn't been touched
-# yet so this picks up theme.DEFAULT_THEME on first run.
+# Title/icon read from the active theme. Browser refreshes start a new
+# session, so seed session_state['theme'] from the ?theme= URL query
+# param BEFORE we read it for the page title — that way refreshes preserve
+# the user's theme choice instead of always reverting to the default.
+theme.init_theme_from_url()
 st.set_page_config(
     page_title=t('page_title'),
     page_icon=t('page_icon'),
@@ -273,7 +276,7 @@ def check_and_speak():
 
 
 def play_page_load_sound() -> None:
-    """Play sounds/page_load.m4a once per browser session.
+    """Play sounds/page_load.mp3 once per browser session.
 
     Streamlit reruns the script on every interaction but keeps session_state
     intact; a fresh tab or browser refresh starts a new session, so we use
@@ -281,24 +284,29 @@ def play_page_load_sound() -> None:
     load. Respects the herald_voice toggle — if the user has muted the
     voice we skip the welcome sound too.
 
+    Codec note: the source was an M4A (AAC-LC) with 585 KB of embedded
+    cover art, which most browsers don't decode reliably inside an audio
+    data URI. Converted to mono 128 kbps MP3 (~275 KB, 17.5 s) via ffmpeg
+    so this hits the same proven codec path as the score sting and the
+    end-of-game fanfare.
+
     Caveat: browser autoplay policy may block this on a cold page load
     (no recent user gesture). Once the user has clicked anything on the
-    domain in the past, modern browsers usually grant autoplay permission
-    via the media-engagement index, so it'll play on subsequent visits
-    even before the user interacts with the page.
+    domain, the media-engagement index usually grants autoplay on
+    subsequent visits.
     """
     if st.session_state.get('page_load_played'):
         return
     st.session_state['page_load_played'] = True
     if not st.session_state.get('herald_voice', True):
         return
-    audio_bytes = _sound_bytes('page_load.m4a')
+    audio_bytes = _sound_bytes('page_load.mp3')
     if not audio_bytes:
         return
     b64 = base64.b64encode(audio_bytes).decode('ascii')
     st.markdown(
-        f'<audio autoplay data-page-load="1" '
-        f'src="data:audio/mp4;base64,{b64}"></audio>',
+        f'<audio autoplay preload="auto" data-page-load="1" '
+        f'src="data:audio/mp3;base64,{b64}"></audio>',
         unsafe_allow_html=True,
     )
 
@@ -370,6 +378,9 @@ _picked_display = st.sidebar.selectbox(
 _picked_key = _theme_display_to_key[_picked_display]
 if _picked_key != theme.current_theme_key():
     st.session_state['theme'] = _picked_key
+    # Persist to the URL query param so browser refreshes keep the
+    # selection rather than reverting to DEFAULT_THEME.
+    theme.persist_theme_to_url(_picked_key)
     st.rerun()
 
 # Welcome sound — fires once per browser session (page refresh → new session
