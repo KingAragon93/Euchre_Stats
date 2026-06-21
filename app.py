@@ -575,6 +575,47 @@ def compute_rivalry_stats(team1_name, team1_players, team2_name, team2_players):
     }
 
 
+def compute_partnership_stats(team_players):
+    """Count finished sagas where every player in `team_players` was on the
+    SAME team (regardless of which side they sat or who else was on it).
+
+    This is intentionally more lenient than compute_rivalry_stats — rivalry
+    needs exact roster equality on both sides, so any change in team size
+    (3v3 → 2v2, someone subs in/out) drops a game from the rivalry count.
+    For partnerships we just want 'how many times have these people played
+    on the same side together', so we use subset containment instead of
+    equality. Returns None if the pair has fewer than 2 games together.
+    """
+    try:
+        games = db.get_finished_games() or []
+    except Exception as e:
+        logger.warning("Partnership lookup failed: %s", e)
+        return None
+    if not team_players or len(team_players) < 2:
+        return None
+    target = frozenset(team_players)
+    total = wins = 0
+    for g in games:
+        # Check each side once; break on first match so a game with the
+        # whole group split across both teams (impossible if subset matches
+        # exactly one team, but defensive) doesn't double-count.
+        for tk in ('team1', 'team2'):
+            roster = frozenset(g.get(f"{tk}_players") or [])
+            if target.issubset(roster):
+                total += 1
+                if g.get('winner') == g.get(f"{tk}_name"):
+                    wins += 1
+                break
+    if total < 2:
+        return None
+    return {
+        'total': total,
+        'wins': wins,
+        'losses': total - wins,
+        'win_pct': int(round(wins / total * 100)) if total else 0,
+    }
+
+
 def show_endgame_celebration(game_id: str):
     """Dedicated post-Crown view. Stays on Active Campaigns route so we don't
     navigate into the heavy Hall of Victories render (which was making the
@@ -652,7 +693,7 @@ def show_endgame_celebration(game_id: str):
                     delta=t('celebration_mighty_delta', name=name, call=call),
                 )
 
-    # Head-to-head rivalry record
+    # Head-to-head rivalry record (exact roster equality on both sides)
     rivalry = compute_rivalry_stats(
         game['team1_name'], game.get('team1_players') or [],
         game['team2_name'], game.get('team2_players') or [],
@@ -674,6 +715,43 @@ def show_endgame_celebration(game_id: str):
                 rivalry['team2_wins'],
                 delta=t('celebration_rivalry_avg', avg=rivalry['team2_avg']),
             )
+
+    # Partnership records — total games where each side's players have been
+    # teammates, regardless of exact roster size or who else was on the team.
+    # This catches the cases that rivalry misses (3v3 → 2v2 nights, subs).
+    team1_partnership = compute_partnership_stats(game.get('team1_players') or [])
+    team2_partnership = compute_partnership_stats(game.get('team2_players') or [])
+    if team1_partnership or team2_partnership:
+        st.divider()
+        st.subheader(t('celebration_partnership_header'))
+        st.caption(t('celebration_partnership_caption'))
+        c1, c2 = st.columns(2)
+        with c1:
+            if team1_partnership:
+                pair = " & ".join(game.get('team1_players') or [])
+                st.metric(
+                    pair or game['team1_name'],
+                    t('celebration_partnership_total', n=team1_partnership['total']),
+                    delta=t(
+                        'celebration_partnership_record',
+                        wins=team1_partnership['wins'],
+                        losses=team1_partnership['losses'],
+                        pct=team1_partnership['win_pct'],
+                    ),
+                )
+        with c2:
+            if team2_partnership:
+                pair = " & ".join(game.get('team2_players') or [])
+                st.metric(
+                    pair or game['team2_name'],
+                    t('celebration_partnership_total', n=team2_partnership['total']),
+                    delta=t(
+                        'celebration_partnership_record',
+                        wins=team2_partnership['wins'],
+                        losses=team2_partnership['losses'],
+                        pct=team2_partnership['win_pct'],
+                    ),
+                )
 
     st.divider()
 
